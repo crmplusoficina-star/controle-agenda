@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import type { Appointment, Technician } from '../types';
 import { addDays, isoDate } from '../lib/date';
+import { supabase } from '../lib/supabase';
 
 const dayName = new Intl.DateTimeFormat('pt-BR', { weekday: 'short' });
 const dayDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
@@ -25,54 +25,58 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
   const days = Array.from({ length: 6 }, (_, i) => addDays(weekStart, i));
   const weekEnd = days[5];
   const title = `${dayDate.format(weekStart)} — ${dayDate.format(weekEnd)}`;
-  const forecast = appointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
-  const shellRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef({ active: false, startX: 0, scrollLeft: 0, moved: false });
-  const suppressClickRef = useRef(false);
-  const [dragging, setDragging] = useState(false);
+  const [localCopies, setLocalCopies] = useState<Appointment[]>([]);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
 
-  function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    const target = event.target as HTMLElement;
-    if (target.closest('input, select, textarea, a')) return;
-    const shell = shellRef.current;
-    if (!shell || shell.scrollWidth <= shell.clientWidth) return;
-    dragRef.current = { active: true, startX: event.clientX, scrollLeft: shell.scrollLeft, moved: false };
-    shell.setPointerCapture(event.pointerId);
-  }
+  useEffect(() => { setLocalCopies([]); }, [weekStart]);
 
-  function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    const shell = shellRef.current;
-    if (!shell || !dragRef.current.active) return;
-    const delta = event.clientX - dragRef.current.startX;
-    if (!dragRef.current.moved && Math.abs(delta) < 5) return;
-    dragRef.current.moved = true;
-    setDragging(true);
-    shell.scrollLeft = dragRef.current.scrollLeft - delta;
-    event.preventDefault();
-  }
+  const allAppointments = useMemo(() => {
+    const known = new Set(appointments.map((item) => item.id));
+    return [...appointments, ...localCopies.filter((item) => !known.has(item.id))];
+  }, [appointments, localCopies]);
 
-  function stopDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    const shell = shellRef.current;
-    const moved = dragRef.current.moved;
-    dragRef.current.active = false;
-    dragRef.current.moved = false;
-    setDragging(false);
-    if (moved) {
-      suppressClickRef.current = true;
-      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+  const forecast = allAppointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
+  const dragged = draggedId ? allAppointments.find((item) => item.id === draggedId) || null : null;
+
+  async function copyAppointment(source: Appointment, targetDate: string, targetTechnicianId: string) {
+    if (copying || source.appointment_date === targetDate || source.technician_id !== targetTechnicianId) return;
+    const tech = technicians.find((item) => item.id === targetTechnicianId);
+    if (!tech) return;
+    setCopying(true);
+    const payload = {
+      branch: tech.branch,
+      appointment_date: targetDate,
+      technician_id: targetTechnicianId,
+      client_name: source.client_name,
+      equipment_serial: source.equipment_serial,
+      service_city: source.service_city,
+      status: source.status,
+      service_reason: source.service_reason,
+      description: source.description,
+      reported_hourmeter: null,
+      forecast_amount: source.forecast_amount || 0,
+      billing_status: source.billing_status,
+    };
+    const { data, error } = await supabase
+      .from('appointments')
+      .insert(payload)
+      .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status')
+      .single();
+    if (!error && data) {
+      const inserted = data as Appointment;
+      setLocalCopies((current) => [...current, inserted]);
+      void supabase.functions.invoke('agenda-insights', { body: { appointment_id: inserted.id } });
     }
-    if (shell?.hasPointerCapture(event.pointerId)) shell.releasePointerCapture(event.pointerId);
-  }
-
-  function blockClickAfterDrag(event: ReactMouseEvent<HTMLDivElement>) {
-    if (!suppressClickRef.current) return;
-    event.preventDefault();
-    event.stopPropagation();
+    setCopying(false);
+    setDraggedId(null);
+    setDropTarget(null);
   }
 
   return <div className="agenda-view">
     <div className="agenda-toolbar">
-      <div><strong>{title}</strong><span>{appointments.length} atendimento{appointments.length === 1 ? '' : 's'} · {money.format(forecast)}</span></div>
+      <div><strong>{title}</strong><span>{allAppointments.length} atendimento{allAppointments.length === 1 ? '' : 's'} · {money.format(forecast)}</span></div>
       <div className="toolbar-actions">
         <button className="subtle-button" onClick={() => onWeek(new Date())}>Hoje</button>
         <button className="icon-button" onClick={() => onWeek(addDays(weekStart, -7))}><ChevronLeft size={18} /></button>
@@ -80,15 +84,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
         <button className="primary-button" onClick={onAddTechnician}><Plus size={17} /> Técnico</button>
       </div>
     </div>
-    <div
-      className={`agenda-shell agenda-drag-scroll ${dragging ? 'dragging' : ''}`}
-      ref={shellRef}
-      onPointerDown={startDrag}
-      onPointerMove={moveDrag}
-      onPointerUp={stopDrag}
-      onPointerCancel={stopDrag}
-      onClickCapture={blockClickAfterDrag}
-    >
+    <div className="agenda-shell agenda-week-fit">
       <div className="agenda-grid agenda-head">
         <div className="tech-col">Técnico</div>
         {days.map((day) => <div key={isoDate(day)} className="day-head"><span>{dayName.format(day).replace('.', '')}</span><strong>{dayDate.format(day)}</strong></div>)}
@@ -98,15 +94,33 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
           <div className="tech-col tech-name"><strong>{tech.name}</strong><span>{tech.branch}</span></div>
           {days.map((day) => {
             const date = isoDate(day);
-            const items = appointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
-            return <div className="day-cell" key={date} onClick={() => items.length === 0 && onNew(date, tech.id)}>
+            const cellKey = `${tech.id}|${date}`;
+            const items = allAppointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
+            const canDrop = Boolean(dragged && dragged.technician_id === tech.id && dragged.appointment_date !== date);
+            return <div
+              className={`day-cell ${dropTarget === cellKey && canDrop ? 'copy-drop-target' : ''}`}
+              key={date}
+              onClick={() => items.length === 0 && !draggedId && onNew(date, tech.id)}
+              onDragOver={(event) => { if (!canDrop) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropTarget(cellKey); }}
+              onDragLeave={() => dropTarget === cellKey && setDropTarget(null)}
+              onDrop={(event) => { event.preventDefault(); if (dragged && canDrop) void copyAppointment(dragged, date, tech.id); }}
+            >
               {items.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => (
-                <button key={item.id} className={`appointment-card ${statusClass[item.status] || ''}`} onClick={(e) => { e.stopPropagation(); onEdit(item); }}>
+                <button
+                  key={item.id}
+                  draggable
+                  className={`appointment-card ${statusClass[item.status] || ''} ${draggedId === item.id ? 'copy-dragging' : ''}`}
+                  onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('text/plain', item.id); }}
+                  onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
+                  onClick={(e) => { e.stopPropagation(); if (!draggedId) onEdit(item); }}
+                  title="Arraste para outro dia da mesma linha para copiar"
+                >
                   <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
                   <span>{item.service_city || 'Cidade não informada'}</span>
                   <small>{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
                 </button>
               ))}
+              {copying && dropTarget === cellKey && <span className="copying-label">Copiando...</span>}
             </div>;
           })}
         </div>
