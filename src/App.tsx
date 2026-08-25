@@ -12,7 +12,7 @@ import { RetentionView } from './features/RetentionView';
 import { FollowupView } from './features/FollowupView';
 import { supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
-import { emptyAppointment } from './drafts';
+import { emptyAppointment, emptyFollowup } from './drafts';
 import type { AppointmentDraft, FollowupDraft } from './drafts';
 import type { Appointment, Branch, ClientSummary, Followup, HistoryRow, Insight, MachineSummary, Technician, ViewName } from './types';
 import './styles.css';
@@ -22,6 +22,29 @@ const MULTI_SEPARATOR = '||';
 const RETENTION_PAGE_SIZE = 1000;
 const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
 const selectedBranchValues = (filter: string) => filter === ALL ? [] : filter.split(MULTI_SEPARATOR).map((item) => item.trim()).filter(Boolean);
+
+function parseMoney(value: string) {
+  if (!value.trim()) return null;
+  const normalized = value.replace(/\./g, '').replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function followupToDraft(item: Followup): FollowupDraft {
+  return {
+    id: item.id,
+    branch: item.branch,
+    client_name: item.client_name,
+    equipment_serial: item.equipment_serial || '',
+    stage: item.stage || 'prospectar',
+    next_followup_date: item.next_followup_date || '',
+    notes: item.notes || '',
+    result: item.result || '',
+    sale_kind: item.sale_kind || '',
+    parts_value: item.parts_value == null ? '' : String(item.parts_value),
+    services_value: item.services_value == null ? '' : String(item.services_value),
+  };
+}
 
 export default function App() {
   const [view, setView] = useState<ViewName>('agenda');
@@ -51,6 +74,7 @@ export default function App() {
   const [followups, setFollowups] = useState<Followup[]>([]);
   const [followupLoading, setFollowupLoading] = useState(false);
   const [followupDraft, setFollowupDraft] = useState<FollowupDraft | null>(null);
+  const [followupError, setFollowupError] = useState('');
   const [insights, setInsights] = useState<Insight[]>([]);
   const [showInsights, setShowInsights] = useState(false);
   const selectedBranches = selectedBranchValues(branch);
@@ -101,11 +125,7 @@ export default function App() {
       async function fetchClients() {
         const rows: ClientSummary[] = [];
         for (let from = 0; ; from += RETENTION_PAGE_SIZE) {
-          let query = supabase
-            .from('g4_client_summary')
-            .select('*')
-            .order('last_service_at', { ascending: false })
-            .range(from, from + RETENTION_PAGE_SIZE - 1);
+          let query = supabase.from('g4_client_summary').select('*').order('last_service_at', { ascending: false }).range(from, from + RETENTION_PAGE_SIZE - 1);
           if (branchFilter.length) query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
@@ -119,13 +139,7 @@ export default function App() {
       async function fetchFutureClients() {
         const rows: { client_name: string | null; branch: string }[] = [];
         for (let from = 0; ; from += RETENTION_PAGE_SIZE) {
-          let query = supabase
-            .from('appointments')
-            .select('client_name,branch')
-            .gte('appointment_date', isoDate(new Date()))
-            .not('client_name', 'is', null)
-            .order('appointment_date')
-            .range(from, from + RETENTION_PAGE_SIZE - 1);
+          let query = supabase.from('appointments').select('client_name,branch').gte('appointment_date', isoDate(new Date())).not('client_name', 'is', null).order('appointment_date').range(from, from + RETENTION_PAGE_SIZE - 1);
           if (branchFilter.length) query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
@@ -139,12 +153,7 @@ export default function App() {
       async function fetchMachines() {
         const rows: { serial: string; client_name: string | null; branch: string }[] = [];
         for (let from = 0; ; from += RETENTION_PAGE_SIZE) {
-          let query = supabase
-            .from('g4_machine_summary')
-            .select('serial,client_name,branch')
-            .not('client_name', 'is', null)
-            .order('serial')
-            .range(from, from + RETENTION_PAGE_SIZE - 1);
+          let query = supabase.from('g4_machine_summary').select('serial,client_name,branch').not('client_name', 'is', null).order('serial').range(from, from + RETENTION_PAGE_SIZE - 1);
           if (branchFilter.length) query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
@@ -158,14 +167,8 @@ export default function App() {
       try {
         const [clientRows, futureRows, machineRows] = await Promise.all([fetchClients(), fetchFutureClients(), fetchMachines()]);
         if (cancelled) return;
-
         setClients(clientRows);
-        setRetentionFutureClients(new Set(
-          futureRows
-            .map((row) => retentionKey(String(row.client_name || ''), String(row.branch || '')))
-            .filter((key) => key !== '|'),
-        ));
-
+        setRetentionFutureClients(new Set(futureRows.map((row) => retentionKey(String(row.client_name || ''), String(row.branch || ''))).filter((key) => key !== '|')));
         const serials: Record<string, string[]> = {};
         for (const row of machineRows) {
           const clientName = String(row.client_name || '');
@@ -194,17 +197,19 @@ export default function App() {
     return () => { cancelled = true; };
   }, [view, branch]);
 
-  useEffect(() => {
-    if (view !== 'followup') return;
+  const loadFollowups = useCallback(async () => {
     setFollowupLoading(true);
     const branchFilter = selectedBranchValues(branch);
-    let q = supabase.from('followups').select('*').order('action_date', { ascending: false }).limit(500);
+    let q = supabase.from('followups').select('*').order('updated_at', { ascending: false }).limit(500);
     if (branchFilter.length) q = q.in('branch', branchFilter);
-    q.then(({ data }) => {
-      setFollowups((data || []) as Followup[]);
-      setFollowupLoading(false);
-    });
-  }, [view, branch]);
+    const { data } = await q;
+    setFollowups((data || []) as Followup[]);
+    setFollowupLoading(false);
+  }, [branch]);
+
+  useEffect(() => {
+    if (view === 'followup') void loadFollowups();
+  }, [view, loadFollowups]);
 
   async function searchMachines(term: string, limit = 12) {
     const clean = term.trim();
@@ -233,12 +238,7 @@ export default function App() {
   async function selectMachine(machine: MachineSummary) {
     setMachineContext(machine);
     setMachineSuggestions([]);
-    setAppointmentDraft((draft) => draft ? {
-      ...draft,
-      equipment_serial: machine.serial,
-      client_name: machine.client_name || draft.client_name,
-      service_city: machine.city || draft.service_city,
-    } : draft);
+    setAppointmentDraft((draft) => draft ? { ...draft, equipment_serial: machine.serial, client_name: machine.client_name || draft.client_name, service_city: machine.city || draft.service_city } : draft);
     const { data } = await supabase.from('hourmeter_readings').select('hourmeter,reading_date').eq('equipment_serial', machine.serial).order('reading_date', { ascending: false }).limit(1);
     setLastHourmeter((data || [])[0] as { hourmeter: number; reading_date: string } || null);
   }
@@ -374,43 +374,86 @@ export default function App() {
     if (serial) searchMachines(serial, 1).then((rows) => rows[0] && selectMachine(rows[0]));
   }
 
-  function newFollowup(client?: ClientSummary) {
-    setFollowupDraft({
-      branch: client?.branch || defaultBranch,
-      client_name: client?.client_name || '',
-      equipment_serial: '',
-      action_date: isoDate(new Date()),
-      treatment_type: 'retorno',
-      status: 'contato_realizado',
-      estimated_value: '',
-      next_followup_date: '',
-      notes: '',
-    });
+  function openFollowup(item: Followup) {
+    setFollowupError('');
+    setFollowupDraft(followupToDraft(item));
+  }
+
+  async function newFollowup(client?: ClientSummary) {
+    setFollowupError('');
+    if (client) {
+      const { data } = await supabase
+        .from('followups')
+        .select('*')
+        .eq('branch', client.branch)
+        .ilike('client_name', client.client_name)
+        .neq('stage', 'encerrar')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      const existing = (data || [])[0] as Followup | undefined;
+      if (existing) {
+        openFollowup(existing);
+        return;
+      }
+      const serials = retentionSerials[retentionKey(client.client_name, client.branch)] || [];
+      setFollowupDraft({
+        ...emptyFollowup(client.branch),
+        client_name: client.client_name,
+        equipment_serial: serials.length === 1 ? serials[0] : '',
+      });
+      return;
+    }
+    setFollowupDraft(emptyFollowup(defaultBranch));
   }
 
   async function saveFollowup(e: FormEvent) {
     e.preventDefault();
     if (!followupDraft?.client_name.trim()) return;
-    const payload = {
-      ...followupDraft,
-      client_name: followupDraft.client_name.trim(),
-      equipment_serial: followupDraft.equipment_serial.trim() || null,
-      estimated_value: followupDraft.estimated_value ? Number(followupDraft.estimated_value.replace(',', '.')) : null,
-      next_followup_date: followupDraft.next_followup_date || null,
-      notes: followupDraft.notes.trim() || null,
-    };
-    const { error } = await supabase.from('followups').insert(payload);
-    if (!error) {
-      setFollowupDraft(null);
-      if (view === 'followup') {
-        setFollowupLoading(true);
-        let q = supabase.from('followups').select('*').order('action_date', { ascending: false });
-        if (selectedBranches.length) q = q.in('branch', selectedBranches);
-        const { data } = await q;
-        setFollowups((data || []) as Followup[]);
-        setFollowupLoading(false);
-      }
+    setFollowupError('');
+
+    if (followupDraft.stage === 'encerrar' && !followupDraft.result) {
+      setFollowupError('Selecione Venda ganha ou Venda perdida.');
+      return;
     }
+    if (followupDraft.result === 'venda_ganha' && !followupDraft.sale_kind) {
+      setFollowupError('Informe se a venda foi de peças, serviços ou ambos.');
+      return;
+    }
+
+    const payload = {
+      branch: followupDraft.branch,
+      client_name: followupDraft.client_name.trim(),
+      equipment_serial: followupDraft.equipment_serial.trim().toUpperCase() || null,
+      stage: followupDraft.stage,
+      next_followup_date: followupDraft.stage === 'encerrar' ? null : (followupDraft.next_followup_date || null),
+      notes: followupDraft.notes.trim() || null,
+      result: followupDraft.stage === 'encerrar' ? (followupDraft.result || null) : null,
+      sale_kind: followupDraft.result === 'venda_ganha' ? (followupDraft.sale_kind || null) : null,
+      parts_value: followupDraft.result === 'venda_ganha' && (followupDraft.sale_kind === 'pecas' || followupDraft.sale_kind === 'pecas_servicos') ? parseMoney(followupDraft.parts_value) : null,
+      services_value: followupDraft.result === 'venda_ganha' && (followupDraft.sale_kind === 'servicos' || followupDraft.sale_kind === 'pecas_servicos') ? parseMoney(followupDraft.services_value) : null,
+    };
+
+    const response = followupDraft.id
+      ? await supabase.from('followups').update(payload).eq('id', followupDraft.id)
+      : await supabase.from('followups').insert(payload);
+
+    if (response.error) {
+      if (response.error.code === '23505') {
+        const { data } = await supabase.from('followups').select('*').eq('branch', followupDraft.branch).ilike('client_name', followupDraft.client_name.trim()).neq('stage', 'encerrar').order('updated_at', { ascending: false }).limit(1);
+        const existing = (data || [])[0] as Followup | undefined;
+        if (existing) {
+          setFollowupError('Esse cliente já possui uma tratativa aberta. Ela foi carregada para você.');
+          setFollowupDraft(followupToDraft(existing));
+          return;
+        }
+      }
+      setFollowupError(response.error.message);
+      return;
+    }
+
+    setFollowupDraft(null);
+    setFollowupError('');
+    if (view === 'followup') await loadFollowups();
   }
 
   async function feedbackInsight(id: string, status: 'viewed' | 'ignored' | 'useful') {
@@ -424,14 +467,14 @@ export default function App() {
       <Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} />
       <main className="content">
         {view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(date) => setWeekStart(startOfWeek(date))} technicians={technicians} appointments={appointments} loading={agendaLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} />}
-        {view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} appointments={appointments} technicians={technicians} weekStart={weekStart} onFollowup={(client) => newFollowup(client)} onOpen={openClient} onSchedule={scheduleFromRetention} />}
-        {view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => newFollowup()} />}
+        {view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} appointments={appointments} technicians={technicians} weekStart={weekStart} onFollowup={(client) => { void newFollowup(client); }} onOpen={openClient} onSchedule={scheduleFromRetention} />}
+        {view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => { void newFollowup(); }} onEdit={openFollowup} />}
       </main>
     </div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />
     <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} onName={setTechName} onBranch={setTechBranch} onClose={() => setShowTechnician(false)} onSubmit={addTechnician} />
     <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} />
-    <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} onClose={() => setFollowupDraft(null)} onSubmit={saveFollowup} />
+    <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} error={followupError} onClose={() => { setFollowupDraft(null); setFollowupError(''); }} onSubmit={saveFollowup} />
     <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
   </div>;
 }
