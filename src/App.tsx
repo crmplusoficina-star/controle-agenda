@@ -4,12 +4,11 @@ import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { AppointmentDrawer } from './components/AppointmentDrawer';
 import { TechnicianDrawer } from './components/TechnicianDrawer';
-import { MachineDetailDrawer } from './components/MachineDetailDrawer';
 import { FollowupDrawer } from './components/FollowupDrawer';
 import { InsightsDrawer } from './components/InsightsDrawer';
+import { ClientDetailDrawer } from './components/ClientDetailDrawer';
 import { AgendaView } from './features/AgendaView';
 import { RetentionView } from './features/RetentionView';
-import { EquipmentView } from './features/EquipmentView';
 import { FollowupView } from './features/FollowupView';
 import { supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
@@ -42,10 +41,10 @@ export default function App() {
   const [retentionLoading, setRetentionLoading] = useState(false);
   const [retentionFutureClients, setRetentionFutureClients] = useState<Set<string>>(new Set());
   const [retentionSerials, setRetentionSerials] = useState<Record<string, string[]>>({});
-  const [equipmentResults, setEquipmentResults] = useState<MachineSummary[]>([]);
-  const [equipmentLoading, setEquipmentLoading] = useState(false);
-  const [machineDetail, setMachineDetail] = useState<MachineSummary | null>(null);
-  const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [clientDetail, setClientDetail] = useState<ClientSummary | null>(null);
+  const [clientMachines, setClientMachines] = useState<MachineSummary[]>([]);
+  const [clientHistory, setClientHistory] = useState<HistoryRow[]>([]);
+  const [clientDetailLoading, setClientDetailLoading] = useState(false);
   const [followups, setFollowups] = useState<Followup[]>([]);
   const [followupLoading, setFollowupLoading] = useState(false);
   const [followupDraft, setFollowupDraft] = useState<FollowupDraft | null>(null);
@@ -171,8 +170,22 @@ export default function App() {
   async function deleteAppointment() { if (!appointmentDraft?.id) return; await supabase.from('appointments').delete().eq('id', appointmentDraft.id); setAppointmentDraft(null); await loadAgenda(); }
 
   async function addTechnician(e: FormEvent) { e.preventDefault(); if (!techName.trim() || !techBranch) return; const { error } = await supabase.from('technicians').insert({ branch: techBranch, name: techName.trim() }); if (!error) { setTechName(''); setShowTechnician(false); await loadAgenda(); } }
-  async function equipmentSearch(term: string) { setEquipmentLoading(true); setEquipmentResults(await searchMachines(term, 60)); setEquipmentLoading(false); }
-  async function openMachine(machine: MachineSummary) { setMachineDetail(machine); setHistory([]); const { data } = await supabase.from('g4_history_app').select('*').eq('serial', machine.serial).order('service_date', { ascending: false }).limit(12); setHistory((data || []) as HistoryRow[]); }
+
+  async function openClient(client: ClientSummary) {
+    setClientDetail(client);
+    setClientMachines([]);
+    setClientHistory([]);
+    setClientDetailLoading(true);
+    const serials = retentionSerials[retentionKey(client.client_name, client.branch)] || [];
+    let machinesQuery = supabase.from('g4_machine_summary').select('*').eq('branch', client.branch).order('last_service_at', { ascending: false }).limit(100);
+    if (serials.length) machinesQuery = machinesQuery.in('serial', serials);
+    else machinesQuery = machinesQuery.ilike('client_name', client.client_name);
+    const historyQuery = supabase.from('g4_history_app').select('*').eq('branch', client.branch).ilike('client_name', client.client_name).order('service_date', { ascending: false }).limit(80);
+    const [machinesResponse, historyResponse] = await Promise.all([machinesQuery, historyQuery]);
+    setClientMachines((machinesResponse.data || []) as MachineSummary[]);
+    setClientHistory((historyResponse.data || []) as HistoryRow[]);
+    setClientDetailLoading(false);
+  }
 
   function newFollowup(client?: ClientSummary) { setFollowupDraft({ branch: client?.branch || (branch === ALL ? branches[0]?.name || '' : branch), client_name: client?.client_name || '', equipment_serial: '', action_date: isoDate(new Date()), treatment_type: 'retorno', status: 'contato_realizado', estimated_value: '', next_followup_date: '', notes: '' }); }
   async function saveFollowup(e: FormEvent) {
@@ -182,10 +195,10 @@ export default function App() {
   }
   async function feedbackInsight(id: string, status: 'viewed'|'ignored'|'useful') { await supabase.from('ai_insights').update({ status }).eq('id', id); await loadInsights(); }
 
-  return <div className="app-shell"><Sidebar view={view} onView={setView} /><div className="workspace"><Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} /><main className="content">{view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(d) => setWeekStart(startOfWeek(d))} technicians={technicians} appointments={appointments} loading={agendaLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} />}{view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} onFollowup={(client) => newFollowup(client)} />}{view === 'equipamentos' && <EquipmentView results={equipmentResults} loading={equipmentLoading} onSearch={equipmentSearch} onOpen={openMachine} />}{view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => newFollowup()} />}</main></div>
+  return <div className="app-shell"><Sidebar view={view} onView={setView} /><div className="workspace"><Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} /><main className="content">{view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(d) => setWeekStart(startOfWeek(d))} technicians={technicians} appointments={appointments} loading={agendaLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} />}{view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} onFollowup={(client) => newFollowup(client)} onOpen={openClient} />}{view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => newFollowup()} />}</main></div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />
     <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} onName={setTechName} onBranch={setTechBranch} onClose={() => setShowTechnician(false)} onSubmit={addTechnician} />
-    <MachineDetailDrawer machine={machineDetail} history={history} onClose={() => setMachineDetail(null)} />
+    <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} />
     <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} onClose={() => setFollowupDraft(null)} onSubmit={saveFollowup} />
     <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
   </div>;
