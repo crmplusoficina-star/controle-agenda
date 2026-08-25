@@ -19,6 +19,7 @@ import type { Appointment, Branch, ClientSummary, Followup, HistoryRow, Insight,
 import './styles.css';
 
 const ALL = '__all__';
+const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
 
 export default function App() {
   const [view, setView] = useState<ViewName>('agenda');
@@ -40,6 +41,7 @@ export default function App() {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [retentionLoading, setRetentionLoading] = useState(false);
   const [retentionFutureClients, setRetentionFutureClients] = useState<Set<string>>(new Set());
+  const [retentionSerials, setRetentionSerials] = useState<Record<string, string[]>>({});
   const [equipmentResults, setEquipmentResults] = useState<MachineSummary[]>([]);
   const [equipmentLoading, setEquipmentLoading] = useState(false);
   const [machineDetail, setMachineDetail] = useState<MachineSummary | null>(null);
@@ -73,12 +75,29 @@ export default function App() {
   useEffect(() => {
     if (view !== 'retencao') return;
     setRetentionLoading(true);
-    let clientQuery = supabase.from('g4_client_summary').select('*').order('last_service_at', { ascending: true }).limit(5000);
-    let futureQuery = supabase.from('appointments').select('client_name').gte('appointment_date', isoDate(new Date())).not('client_name', 'is', null).limit(5000);
-    if (branch !== ALL) { clientQuery = clientQuery.eq('branch', branch); futureQuery = futureQuery.eq('branch', branch); }
-    Promise.all([clientQuery, futureQuery]).then(([clientsResponse, futureResponse]) => {
+    let clientQuery = supabase.from('g4_client_summary').select('*').order('last_service_at', { ascending: false }).limit(5000);
+    let futureQuery = supabase.from('appointments').select('client_name,branch').gte('appointment_date', isoDate(new Date())).not('client_name', 'is', null).limit(5000);
+    let machineQuery = supabase.from('g4_machine_summary').select('serial,client_name,branch').not('client_name', 'is', null).limit(5000);
+    if (branch !== ALL) {
+      clientQuery = clientQuery.eq('branch', branch);
+      futureQuery = futureQuery.eq('branch', branch);
+      machineQuery = machineQuery.eq('branch', branch);
+    }
+    Promise.all([clientQuery, futureQuery, machineQuery]).then(([clientsResponse, futureResponse, machineResponse]) => {
       setClients((clientsResponse.data || []) as ClientSummary[]);
-      setRetentionFutureClients(new Set((futureResponse.data || []).map((row: any) => String(row.client_name || '').trim().toUpperCase()).filter(Boolean)));
+      setRetentionFutureClients(new Set((futureResponse.data || []).map((row: any) => retentionKey(String(row.client_name || ''), String(row.branch || ''))).filter((key) => key !== '|')));
+      const serials: Record<string, string[]> = {};
+      for (const row of machineResponse.data || []) {
+        const clientName = String((row as any).client_name || '');
+        const branchName = String((row as any).branch || '');
+        const serial = String((row as any).serial || '').trim();
+        if (!clientName || !branchName || !serial) continue;
+        const key = retentionKey(clientName, branchName);
+        if (!serials[key]) serials[key] = [];
+        if (!serials[key].includes(serial)) serials[key].push(serial);
+      }
+      Object.values(serials).forEach((items) => items.sort((a, b) => a.localeCompare(b)));
+      setRetentionSerials(serials);
       setRetentionLoading(false);
     });
   }, [view, branch]);
@@ -163,7 +182,7 @@ export default function App() {
   }
   async function feedbackInsight(id: string, status: 'viewed'|'ignored'|'useful') { await supabase.from('ai_insights').update({ status }).eq('id', id); await loadInsights(); }
 
-  return <div className="app-shell"><Sidebar view={view} onView={setView} /><div className="workspace"><Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} /><main className="content">{view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(d) => setWeekStart(startOfWeek(d))} technicians={technicians} appointments={appointments} loading={agendaLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} />}{view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} onFollowup={(client) => newFollowup(client)} />}{view === 'equipamentos' && <EquipmentView results={equipmentResults} loading={equipmentLoading} onSearch={equipmentSearch} onOpen={openMachine} />}{view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => newFollowup()} />}</main></div>
+  return <div className="app-shell"><Sidebar view={view} onView={setView} /><div className="workspace"><Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} /><main className="content">{view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(d) => setWeekStart(startOfWeek(d))} technicians={technicians} appointments={appointments} loading={agendaLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} />}{view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} onFollowup={(client) => newFollowup(client)} />}{view === 'equipamentos' && <EquipmentView results={equipmentResults} loading={equipmentLoading} onSearch={equipmentSearch} onOpen={openMachine} />}{view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => newFollowup()} />}</main></div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />
     <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} onName={setTechName} onBranch={setTechBranch} onClose={() => setShowTechnician(false)} onSubmit={addTechnician} />
     <MachineDetailDrawer machine={machineDetail} history={history} onClose={() => setMachineDetail(null)} />
