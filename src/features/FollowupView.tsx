@@ -27,7 +27,7 @@ const lostReasonLabels: Record<string, string> = {
   outro: 'Outro',
 };
 
-type ColumnKey = 'client' | 'note' | 'stage' | 'next' | 'result' | 'value';
+type ColumnKey = 'client' | 'note' | 'owner' | 'stage' | 'next' | 'result' | 'value';
 type SortDirection = 'asc' | 'desc';
 
 type ColumnHeaderProps = {
@@ -73,6 +73,10 @@ function resultText(item: Followup) {
   return reason ? `${base} · ${reason}` : base;
 }
 
+function ownerText(item: Followup) {
+  return item.created_by_name || 'Anterior ao login';
+}
+
 export function FollowupView({ rows, loading, onNew, onEdit }: {
   rows: Followup[];
   loading: boolean;
@@ -83,7 +87,7 @@ export function FollowupView({ rows, loading, onNew, onEdit }: {
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
   const [sortKey, setSortKey] = useState<ColumnKey>('next');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', note: '', stage: '', next: '', result: '', value: '' });
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', note: '', owner: '', stage: '', next: '', result: '', value: '' });
 
   function updateFilter(column: ColumnKey, value: string) {
     setFilters((current) => ({ ...current, [column]: value }));
@@ -102,10 +106,12 @@ export function FollowupView({ rows, loading, onNew, onEdit }: {
       const nextText = item.next_followup_date ? dateFmt.format(new Date(`${item.next_followup_date}T12:00:00`)) : '—';
       const stageText = stageLabels[item.stage] || 'Prospectar';
       const result = resultText(item);
-      const globalText = `${item.client_name} ${item.equipment_serial || ''} ${item.branch} ${item.notes || ''} ${stageText} ${nextText} ${result}`.toLowerCase();
+      const owner = ownerText(item);
+      const globalText = `${item.client_name} ${item.equipment_serial || ''} ${item.branch} ${item.notes || ''} ${owner} ${stageText} ${nextText} ${result}`.toLowerCase();
       if (normalizedSearch && !globalText.includes(normalizedSearch)) return false;
       return (!filters.client || `${item.client_name} ${item.equipment_serial || ''} ${item.branch}`.toLowerCase().includes(filters.client.toLowerCase())) &&
         (!filters.note || (item.notes || '').toLowerCase().includes(filters.note.toLowerCase())) &&
+        (!filters.owner || owner.toLowerCase().includes(filters.owner.toLowerCase())) &&
         (!filters.stage || stageText.toLowerCase().includes(filters.stage.toLowerCase())) &&
         (!filters.next || nextText.includes(filters.next)) &&
         (!filters.result || result.toLowerCase().includes(filters.result.toLowerCase())) &&
@@ -118,6 +124,7 @@ export function FollowupView({ rows, loading, onNew, onEdit }: {
       let bv: string | number = '';
       if (sortKey === 'client') { av = a.client_name; bv = b.client_name; }
       if (sortKey === 'note') { av = a.notes || ''; bv = b.notes || ''; }
+      if (sortKey === 'owner') { av = ownerText(a); bv = ownerText(b); }
       if (sortKey === 'stage') { av = stageLabels[a.stage] || ''; bv = stageLabels[b.stage] || ''; }
       if (sortKey === 'next') {
         av = a.next_followup_date ? new Date(`${a.next_followup_date}T12:00:00`).getTime() : Number.MAX_SAFE_INTEGER;
@@ -141,6 +148,7 @@ export function FollowupView({ rows, loading, onNew, onEdit }: {
       <div className="table-head followup-table-columns followup-table-head">
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="note" label="Observação" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.note} setFilter={(value) => updateFilter('note', value)}/>
+        <ColumnHeader column="owner" label="Consultor" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.owner} setFilter={(value) => updateFilter('owner', value)}/>
         <ColumnHeader column="stage" label="Etapa" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.stage} setFilter={(value) => updateFilter('stage', value)}/>
         <ColumnHeader column="next" label="Próximo contato" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.next} setFilter={(value) => updateFilter('next', value)}/>
         <ColumnHeader column="result" label="Resultado" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.result} setFilter={(value) => updateFilter('result', value)}/>
@@ -152,6 +160,7 @@ export function FollowupView({ rows, loading, onNew, onEdit }: {
         return <button className="table-row followup-table-columns followup-table-row" key={item.id} onClick={() => onEdit(item)}>
           <div className="followup-client-cell"><strong>{item.client_name}</strong><small>{item.equipment_serial || item.branch}</small></div>
           <div className="followup-note-cell"><strong>{item.notes || 'Sem observação registrada'}</strong><small>{item.updated_at ? dateFmt.format(new Date(item.updated_at)) : ''}</small></div>
+          <div className="followup-owner-cell"><strong>{ownerText(item)}</strong></div>
           <span className={`followup-stage stage-${item.stage}`}>{stageLabels[item.stage] || 'Prospectar'}</span>
           <strong>{item.next_followup_date ? dateFmt.format(new Date(`${item.next_followup_date}T12:00:00`)) : '—'}</strong>
           <span className={`followup-result result-${item.result || 'open'}`}>{resultText(item)}</span>
