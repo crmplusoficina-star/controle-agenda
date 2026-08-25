@@ -4,7 +4,6 @@ import type { Branch, Insight, ViewName } from '../types';
 const titles: Record<ViewName, { title: string; subtitle: string }> = {
   agenda: { title: 'Agenda', subtitle: 'Organize o atendimento sem perder o contexto.' },
   retencao: { title: 'Retenção', subtitle: 'Clientes que merecem atenção, sem transformar tudo em oportunidade.' },
-  equipamentos: { title: 'Equipamentos', subtitle: 'Histórico G4 pela série da máquina.' },
   followup: { title: 'Follow-up', subtitle: 'Retornos e oportunidades em uma fila simples.' },
 };
 
