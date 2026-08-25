@@ -68,6 +68,15 @@ function relativeDayLabel(dateValue: string) {
   return shortDayFmt.format(date).replace('.', '').toUpperCase();
 }
 
+function normalizeCity(value?: string | null) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
 function cityClusterIcon(count: number) {
   const size = Math.min(64, 38 + Math.round(Math.log2(Math.max(2, count)) * 5));
   return L.divIcon({
@@ -205,8 +214,9 @@ export function RetentionMap({
   const cityClusters = useMemo(() => {
     const groups = new Map<string, MapPoint[]>();
     for (const point of clientPoints) {
-      if (point.precision !== 'city' || !point.city) continue;
-      const key = `${String(point.branch || '').trim().toUpperCase()}|${point.city.trim().toUpperCase()}`;
+      if (!point.city) continue;
+      const key = normalizeCity(point.city);
+      if (!key) continue;
       const group = groups.get(key) || [];
       group.push(point);
       groups.set(key, group);
@@ -217,10 +227,10 @@ export function RetentionMap({
         key,
         points,
         city: points[0].city || 'Cidade não informada',
-        branch: points[0].branch || '',
         lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
         lng: points.reduce((sum, point) => sum + point.lng, 0) / points.length,
         nearRouteCount: points.filter((point) => point.near_route).length,
+        approximateCount: points.filter((point) => point.precision === 'city').length,
       }));
   }, [clientPoints]);
   const clusteredClientIds = useMemo(() => new Set(cityClusters.flatMap((cluster) => cluster.points.map((point) => point.id))), [cityClusters]);
@@ -275,7 +285,8 @@ export function RetentionMap({
             <Popup minWidth={300} maxWidth={340}>
               <div className="map-popup-card city-cluster-card">
                 <strong>{cluster.city}</strong>
-                <span>{cluster.points.length} clientes com localização aproximada pela cidade</span>
+                <span>{cluster.points.length} clientes nesta cidade</span>
+                {cluster.approximateCount > 0 && <small>{cluster.approximateCount} cliente{cluster.approximateCount === 1 ? '' : 's'} sem endereço exato no G4</small>}
                 {routeTechnicianId && cluster.nearRouteCount > 0 && <small className="near-route-note">{cluster.nearRouteCount} cliente{cluster.nearRouteCount === 1 ? '' : 's'} próximo{cluster.nearRouteCount === 1 ? '' : 's'} da rota selecionada</small>}
                 <div className="city-cluster-recency">
                   {recencyCounts.map((item) => <span key={item.key}><i style={{ background: item.color }}/><strong>{item.count}</strong> {item.label}</span>)}
@@ -287,7 +298,7 @@ export function RetentionMap({
                   </button>)}
                 </div>
                 {clusterClients.length > 8 && <small className="city-cluster-more">+{clusterClients.length - 8} outros clientes nesta cidade</small>}
-                <small>Os pontos são agrupados porque o G4 informa apenas a cidade, sem endereço preciso.</small>
+                <small>A bolha reúne os clientes da mesma cidade para manter o mapa legível.</small>
               </div>
             </Popup>
           </Marker>;
@@ -356,6 +367,6 @@ export function RetentionMap({
       {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para traçar a rota</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · pontos sem endereço são agrupados pela cidade. A rota é apoio visual e não substitui planejamento de viagem.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes da mesma cidade são agrupados para evitar sobreposição. A rota é apoio visual e não substitui planejamento de viagem.</div>
   </div>;
 }
