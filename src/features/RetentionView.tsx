@@ -289,7 +289,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   }, [filtered, cityNeedle]);
 
   const mapOriginalByKey = useMemo(() => {
-    const result = new Map<string, ClientSummary>();
+    const result = new globalThis.Map<string, ClientSummary>();
     mapClients.forEach((mapClient, index) => result.set(mapClient.client_key, filtered[index]));
     return result;
   }, [mapClients, filtered]);
