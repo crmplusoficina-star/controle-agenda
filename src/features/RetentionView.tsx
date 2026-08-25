@@ -47,7 +47,14 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
   </div>;
 }
 
-export function RetentionView({ clients, loading, futureClients, serialsByClient, onFollowup }: { clients: ClientSummary[]; loading: boolean; futureClients: Set<string>; serialsByClient: Record<string, string[]>; onFollowup: (client: ClientSummary) => void }) {
+export function RetentionView({ clients, loading, futureClients, serialsByClient, onFollowup, onOpen }: {
+  clients: ClientSummary[];
+  loading: boolean;
+  futureClients: Set<string>;
+  serialsByClient: Record<string, string[]>;
+  onFollowup: (client: ClientSummary) => void;
+  onOpen: (client: ClientSummary) => void;
+}) {
   const [months, setMonths] = useState(6);
   const [search, setSearch] = useState('');
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
@@ -78,8 +85,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     const rows = clients.filter((client) => {
       if (!client.last_service_at) return false;
       const lastDate = new Date(client.last_service_at);
-      const matchPeriod = lastDate >= cutoff && lastDate <= now;
-      if (!matchPeriod) return false;
+      if (lastDate < cutoff || lastDate > now) return false;
 
       const clientSerials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
       const serialText = clientSerials.join(' ');
@@ -89,14 +95,12 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       if (!matchSearch || hasFuture) return false;
 
       const formattedDate = dateFmt.format(lastDate);
-      const columnMatches =
-        (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
+      return (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
         (!filters.serial || serialText.toLowerCase().includes(filters.serial.toLowerCase())) &&
         (!filters.city || (client.city || '').toLowerCase().includes(filters.city.toLowerCase())) &&
         (!filters.last || formattedDate.includes(filters.last)) &&
         (!filters.machines || String(client.machine_count).includes(filters.machines.trim())) &&
         (!filters.os || String(client.service_count).includes(filters.os.trim()));
-      return columnMatches;
     });
 
     const direction = sortDirection === 'asc' ? 1 : -1;
@@ -130,18 +134,18 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         <ColumnHeader column="os" label="OS" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.os} setFilter={(value) => updateFilter('os', value)} numeric/>
         <span></span>
       </div>
-      {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text="O período agora considera somente o intervalo selecionado. Ajuste os filtros se quiser ampliar a análise." /> : filtered.map((client) => {
+      {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text="O período considera somente o intervalo selecionado. Ajuste os filtros se quiser ampliar a análise." /> : filtered.map((client) => {
         const days = client.last_service_at ? daysBetween(client.last_service_at.slice(0, 10)) : 0;
         const serials = serialsFor(client);
         const serialText = serials.length ? serials.join(', ') : '—';
-        return <div className="table-row retention-columns" key={client.client_key}>
+        return <div className="table-row retention-columns retention-click-row" key={client.client_key} role="button" tabIndex={0} onClick={() => onOpen(client)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(client); }}>
           <div><strong>{client.client_name}</strong><small>{client.last_operation_type || 'Última operação não informada'}</small></div>
           <div className="series-cell" title={serialText}><strong>{serialText}</strong></div>
           <span>{client.city || '—'}</span>
           <div><strong>{client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : '—'}</strong><small>{days ? `${Math.floor(days / 30)} meses atrás` : ''}</small></div>
           <strong>{client.machine_count}</strong>
           <strong>{client.service_count}</strong>
-          <button className="row-action" onClick={() => onFollowup(client)}>Criar follow-up</button>
+          <button className="row-action" onClick={(event) => { event.stopPropagation(); onFollowup(client); }}>Criar follow-up</button>
         </div>;
       })}
     </div>
