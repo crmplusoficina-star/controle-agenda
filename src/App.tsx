@@ -15,6 +15,7 @@ import { addDays, isoDate, startOfWeek } from './lib/date';
 import { emptyAppointment, emptyFollowup } from './drafts';
 import type { AppointmentDraft, FollowupDraft } from './drafts';
 import type { Appointment, Branch, ClientSummary, Followup, HistoryRow, Insight, MachineSummary, Technician, ViewName } from './types';
+import { useSession } from './session';
 import './styles.css';
 
 const ALL = '__all__';
@@ -22,6 +23,10 @@ const MULTI_SEPARATOR = '||';
 const RETENTION_PAGE_SIZE = 1000;
 const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
 const selectedBranchValues = (filter: string) => filter === ALL ? [] : filter.split(MULTI_SEPARATOR).map((item) => item.trim()).filter(Boolean);
+const effectiveBranchValues = (filter: string, available: Branch[]) => {
+  const selected = selectedBranchValues(filter);
+  return selected.length ? selected : available.map((item) => item.name);
+};
 
 function parseMoney(value: string) {
   if (!value.trim()) return null;
@@ -47,6 +52,7 @@ function followupToDraft(item: Followup): FollowupDraft {
 }
 
 export default function App() {
+  const { user, branches: allowedBranches } = useSession();
   const [view, setView] = useState<ViewName>('agenda');
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branch, setBranch] = useState(ALL);
@@ -77,47 +83,51 @@ export default function App() {
   const [followupError, setFollowupError] = useState('');
   const [insights, setInsights] = useState<Insight[]>([]);
   const [showInsights, setShowInsights] = useState(false);
-  const selectedBranches = selectedBranchValues(branch);
+  const selectedBranches = effectiveBranchValues(branch, branches);
   const defaultBranch = selectedBranches[0] || branches[0]?.name || '';
 
   useEffect(() => {
-    supabase.from('app_branches').select('name').eq('active', true).order('name').then(({ data }) => {
-      const rows = (data || []) as Branch[];
-      setBranches(rows);
-      if (rows[0]) setTechBranch(rows[0].name);
-    });
-  }, []);
+    setBranches(allowedBranches);
+    setBranch(ALL);
+    setTechBranch(allowedBranches[0]?.name || '');
+  }, [allowedBranches]);
 
   const loadAgenda = useCallback(async () => {
+    if (!branches.length) {
+      setAgendaLoading(false);
+      return;
+    }
     setAgendaLoading(true);
     const end = addDays(weekStart, 5);
-    const branchFilter = selectedBranchValues(branch);
+    const branchFilter = effectiveBranchValues(branch, branches);
     let tq = supabase.from('technicians').select('id,branch,name,active').eq('active', true).order('name');
     let aq = supabase.from('appointments').select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status').gte('appointment_date', isoDate(weekStart)).lte('appointment_date', isoDate(end)).order('appointment_date');
-    if (branchFilter.length) {
-      tq = tq.in('branch', branchFilter);
-      aq = aq.in('branch', branchFilter);
-    }
+    tq = tq.in('branch', branchFilter);
+    aq = aq.in('branch', branchFilter);
     const [t, a] = await Promise.all([tq, aq]);
     setTechnicians((t.data || []) as Technician[]);
     setAppointments((a.data || []) as Appointment[]);
     setAgendaLoading(false);
-  }, [branch, weekStart]);
+  }, [branch, branches, weekStart]);
   useEffect(() => { loadAgenda(); }, [loadAgenda]);
 
   const loadInsights = useCallback(async () => {
-    const branchFilter = selectedBranchValues(branch);
+    if (!branches.length) {
+      setInsights([]);
+      return;
+    }
+    const branchFilter = effectiveBranchValues(branch, branches);
     let q = supabase.from('ai_insights').select('id,appointment_id,branch,insight_type,priority,presentation_level,title,message,status,created_at').in('status', ['new', 'viewed']).order('created_at', { ascending: false }).limit(30);
-    if (branchFilter.length) q = q.in('branch', branchFilter);
+    q = q.in('branch', branchFilter);
     const { data } = await q;
     setInsights((data || []) as Insight[]);
-  }, [branch]);
+  }, [branch, branches]);
   useEffect(() => { loadInsights(); }, [loadInsights]);
 
   useEffect(() => {
-    if (view !== 'retencao') return;
+    if (view !== 'retencao' || !branches.length) return;
     let cancelled = false;
-    const branchFilter = selectedBranchValues(branch);
+    const branchFilter = effectiveBranchValues(branch, branches);
 
     async function loadRetention() {
       setRetentionLoading(true);
@@ -126,7 +136,7 @@ export default function App() {
         const rows: ClientSummary[] = [];
         for (let from = 0; ; from += RETENTION_PAGE_SIZE) {
           let query = supabase.from('g4_client_summary').select('*').order('last_service_at', { ascending: false }).range(from, from + RETENTION_PAGE_SIZE - 1);
-          if (branchFilter.length) query = query.in('branch', branchFilter);
+          query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
           const page = (data || []) as ClientSummary[];
@@ -140,7 +150,7 @@ export default function App() {
         const rows: { client_name: string | null; branch: string }[] = [];
         for (let from = 0; ; from += RETENTION_PAGE_SIZE) {
           let query = supabase.from('appointments').select('client_name,branch').gte('appointment_date', isoDate(new Date())).not('client_name', 'is', null).order('appointment_date').range(from, from + RETENTION_PAGE_SIZE - 1);
-          if (branchFilter.length) query = query.in('branch', branchFilter);
+          query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
           const page = (data || []) as { client_name: string | null; branch: string }[];
@@ -154,7 +164,7 @@ export default function App() {
         const rows: { serial: string; client_name: string | null; branch: string }[] = [];
         for (let from = 0; ; from += RETENTION_PAGE_SIZE) {
           let query = supabase.from('g4_machine_summary').select('serial,client_name,branch').not('client_name', 'is', null).order('serial').range(from, from + RETENTION_PAGE_SIZE - 1);
-          if (branchFilter.length) query = query.in('branch', branchFilter);
+          query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
           const page = (data || []) as { serial: string; client_name: string | null; branch: string }[];
@@ -195,17 +205,22 @@ export default function App() {
 
     void loadRetention();
     return () => { cancelled = true; };
-  }, [view, branch]);
+  }, [view, branch, branches]);
 
   const loadFollowups = useCallback(async () => {
+    if (!branches.length) {
+      setFollowups([]);
+      setFollowupLoading(false);
+      return;
+    }
     setFollowupLoading(true);
-    const branchFilter = selectedBranchValues(branch);
+    const branchFilter = effectiveBranchValues(branch, branches);
     let q = supabase.from('followups').select('*').order('updated_at', { ascending: false }).limit(500);
-    if (branchFilter.length) q = q.in('branch', branchFilter);
+    q = q.in('branch', branchFilter);
     const { data } = await q;
     setFollowups((data || []) as Followup[]);
     setFollowupLoading(false);
-  }, [branch]);
+  }, [branch, branches]);
 
   useEffect(() => {
     if (view === 'followup') void loadFollowups();
@@ -213,10 +228,10 @@ export default function App() {
 
   async function searchMachines(term: string, limit = 12) {
     const clean = term.trim();
-    if (clean.length < 2) return [];
-    const branchFilter = selectedBranchValues(branch);
+    if (clean.length < 2 || !branches.length) return [];
+    const branchFilter = effectiveBranchValues(branch, branches);
     let query = supabase.from('g4_machine_summary').select('*').limit(limit);
-    if (branchFilter.length) query = query.in('branch', branchFilter);
+    query = query.in('branch', branchFilter);
     const pattern = `%${clean}%`;
     const { data } = await query.or(`serial.ilike.${pattern},client_name.ilike.${pattern},city.ilike.${pattern}`);
     return (data || []) as MachineSummary[];
@@ -233,7 +248,7 @@ export default function App() {
     if (term.length < 3 || machineContext?.serial === term) return;
     const timer = window.setTimeout(async () => setMachineSuggestions(await searchMachines(term, 8)), 180);
     return () => window.clearTimeout(timer);
-  }, [appointmentDraft?.equipment_serial, branch, machineContext?.serial]);
+  }, [appointmentDraft?.equipment_serial, branch, branches, machineContext?.serial]);
 
   async function selectMachine(machine: MachineSummary) {
     setMachineContext(machine);
@@ -431,11 +446,13 @@ export default function App() {
       sale_kind: followupDraft.result === 'venda_ganha' ? (followupDraft.sale_kind || null) : null,
       parts_value: followupDraft.result === 'venda_ganha' && (followupDraft.sale_kind === 'pecas' || followupDraft.sale_kind === 'pecas_servicos') ? parseMoney(followupDraft.parts_value) : null,
       services_value: followupDraft.result === 'venda_ganha' && (followupDraft.sale_kind === 'servicos' || followupDraft.sale_kind === 'pecas_servicos') ? parseMoney(followupDraft.services_value) : null,
+      updated_by_matricula: user.matricula,
+      updated_by_name: user.name,
     };
 
     const response = followupDraft.id
       ? await supabase.from('followups').update(payload).eq('id', followupDraft.id)
-      : await supabase.from('followups').insert(payload);
+      : await supabase.from('followups').insert({ ...payload, created_by_matricula: user.matricula, created_by_name: user.name });
 
     if (response.error) {
       if (response.error.code === '23505') {
