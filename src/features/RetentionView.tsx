@@ -101,6 +101,16 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     setActiveColumn(null);
   }
 
+  function applyRecencyFilter(bucket: RecencyBucket | null) {
+    setRecencyFilter(bucket);
+    if (bucket) setMonths(0);
+  }
+
+  function applyPeriodFilter(value: number) {
+    setMonths(value);
+    setRecencyFilter(null);
+  }
+
   const filtered = useMemo(() => {
     const now = new Date();
     const cutoff = new Date(now);
@@ -159,13 +169,13 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
           <button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}><List size={14}/> Lista</button>
           <button type="button" className={mode === 'map' ? 'active' : ''} onClick={() => setMode('map')}><Map size={14}/> Mapa</button>
         </div>
-        <label className="inline-filter"><span>Último atendimento em</span><select value={months} onChange={(e) => setMonths(Number(e.target.value))}><option value={0}>sem filtro de data</option><option value={3}>últimos 3 meses</option><option value={6}>últimos 6 meses</option><option value={9}>últimos 9 meses</option><option value={12}>últimos 12 meses</option><option value={18}>últimos 18 meses</option></select></label>
+        <label className="inline-filter"><span>Último atendimento em</span><select value={months} onChange={(e) => applyPeriodFilter(Number(e.target.value))}><option value={0}>sem filtro de data</option><option value={3}>últimos 3 meses</option><option value={6}>últimos 6 meses</option><option value={9}>últimos 9 meses</option><option value={12}>últimos 12 meses</option><option value={18}>últimos 18 meses</option></select></label>
       </div>
     </div>
 
-    {mode === 'list' && <RecencyLegend active={recencyFilter} onChange={setRecencyFilter}/>} 
+    {mode === 'list' && <RecencyLegend active={recencyFilter} onChange={applyRecencyFilter}/>} 
 
-    {mode === 'map' ? <RetentionMap clients={filtered} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={setRecencyFilter} onOpen={onOpen} onFollowup={onFollowup} onSchedule={onSchedule} /> : <div className="table-shell retention-table">
+    {mode === 'map' ? <RetentionMap clients={filtered} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={applyRecencyFilter} onOpen={onOpen} onFollowup={onFollowup} onSchedule={onSchedule} /> : <div className="table-shell retention-table">
       <div className="table-head retention-columns retention-head">
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
