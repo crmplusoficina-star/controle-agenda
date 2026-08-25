@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { CalendarPlus, Loader2, MapPinned, RefreshCw, Route, UserRound } from 'lucide-react';
+import { CalendarPlus, Loader2, MapPinned, RefreshCw, Route } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { CheckboxMultiSelect } from '../components/CheckboxMultiSelect';
 import type { Appointment, ClientSummary, Technician } from '../types';
-import { daysBetween } from '../lib/date';
+import { recencyColor, retentionRecency } from './retentionRecency';
+import type { RecencyBucket } from './retentionRecency';
 import 'leaflet/dist/leaflet.css';
 import './retention-map.css';
 
@@ -66,16 +68,6 @@ function relativeDayLabel(dateValue: string) {
   return shortDayFmt.format(date).replace('.', '').toUpperCase();
 }
 
-function recencyColor(lastServiceAt?: string | null) {
-  if (!lastServiceAt) return '#475569';
-  const days = daysBetween(lastServiceAt.slice(0, 10));
-  if (days <= 92) return '#16a34a';
-  if (days <= 184) return '#f59e0b';
-  if (days <= 366) return '#dc2626';
-  if (days <= 550) return '#7c3aed';
-  return '#475569';
-}
-
 function FitMap({ points, route }: { points: MapPoint[]; route: MapResponse['route'] }) {
   const map = useMap();
   useEffect(() => {
@@ -98,6 +90,8 @@ export function RetentionMap({
   appointments,
   technicians,
   weekLabel,
+  recencyFilter,
+  onRecencyFilter,
   onOpen,
   onFollowup,
   onSchedule,
@@ -107,6 +101,8 @@ export function RetentionMap({
   appointments: Appointment[];
   technicians: Technician[];
   weekLabel: string;
+  recencyFilter: RecencyBucket | null;
+  onRecencyFilter: (bucket: RecencyBucket | null) => void;
   onOpen: (client: ClientSummary) => void;
   onFollowup: (client: ClientSummary) => void;
   onSchedule: (client: ClientSummary, serial: string, technicianId: string) => void;
@@ -116,15 +112,17 @@ export function RetentionMap({
     return technicians.filter((technician) => ids.has(technician.id));
   }, [appointments, technicians]);
 
-  const [technicianId, setTechnicianId] = useState('');
+  const [technicianIds, setTechnicianIds] = useState<string[]>([]);
   const [data, setData] = useState<MapResponse>({ points: [], route: null, unresolved: 0, geocoded_now: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (technicianId && !scheduledTechnicians.some((technician) => technician.id === technicianId)) setTechnicianId('');
-  }, [scheduledTechnicians, technicianId]);
+    const available = new Set(scheduledTechnicians.map((technician) => technician.id));
+    setTechnicianIds((current) => current.filter((id) => available.has(id)));
+  }, [scheduledTechnicians]);
 
+  const routeTechnicianId = technicianIds.length === 1 ? technicianIds[0] : '';
   const clientByKey = useMemo(() => new Map(clients.map((client) => [client.client_key, client])), [clients]);
 
   const planningByAppointment = useMemo(() => {
@@ -161,7 +159,8 @@ export function RetentionMap({
       city: client.city,
       last_service_at: client.last_service_at,
     }));
-    const payloadAppointments = appointments.map((item) => ({
+    const visibleAppointments = technicianIds.length ? appointments.filter((item) => technicianIds.includes(item.technician_id)) : appointments;
+    const payloadAppointments = visibleAppointments.map((item) => ({
       id: item.id,
       branch: item.branch,
       appointment_date: item.appointment_date,
@@ -173,7 +172,7 @@ export function RetentionMap({
     }));
 
     const { data: response, error: invokeError } = await supabase.functions.invoke('retention-map-context', {
-      body: { clients: payloadClients, appointments: payloadAppointments, technician_id: technicianId || null },
+      body: { clients: payloadClients, appointments: payloadAppointments, technician_id: routeTechnicianId || null },
     });
 
     if (invokeError) {
@@ -182,16 +181,16 @@ export function RetentionMap({
       setData((response || { points: [], route: null, unresolved: 0, geocoded_now: 0 }) as MapResponse);
     }
     setLoading(false);
-  }, [appointments, clients, technicianId, technicians]);
+  }, [appointments, clients, routeTechnicianId, technicianIds, technicians]);
 
   useEffect(() => { void loadMap(); }, [loadMap]);
 
-  const routeLabel = technicianId
-    ? scheduledTechnicians.find((technician) => technician.id === technicianId)?.name || 'Técnico selecionado'
+  const routeLabel = routeTechnicianId
+    ? scheduledTechnicians.find((technician) => technician.id === routeTechnicianId)?.name || 'Técnico selecionado'
     : '';
 
   const clientPoints = data.points.filter((point) => point.kind === 'client');
-  const appointmentPoints = data.points.filter((point) => point.kind === 'appointment' && (!technicianId || point.technician_id === technicianId));
+  const appointmentPoints = data.points.filter((point) => point.kind === 'appointment' && (!technicianIds.length || (point.technician_id && technicianIds.includes(point.technician_id))));
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
 
@@ -202,17 +201,20 @@ export function RetentionMap({
         <span>{weekLabel} · {requestedClients.toLocaleString('pt-BR')} clientes analisados</span>
       </div>
       <div className="map-toolbar-actions">
-        <label className="map-tech-filter"><UserRound size={15}/><select value={technicianId} onChange={(event) => setTechnicianId(event.target.value)}><option value="">Todos os técnicos</option>{scheduledTechnicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.name}</option>)}</select></label>
+        <CheckboxMultiSelect
+          label="Técnico"
+          items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))}
+          selected={technicianIds}
+          onChange={setTechnicianIds}
+          allLabel="Todos os técnicos"
+          compact
+        />
         <button type="button" className="subtle-button" onClick={() => void loadMap()} disabled={loading}>{loading ? <Loader2 className="spin" size={15}/> : <RefreshCw size={15}/>} Atualizar</button>
       </div>
     </div>
 
-    <div className="map-legend">
-      <span><i style={{ background: '#16a34a' }}/> até 3 meses</span>
-      <span><i style={{ background: '#f59e0b' }}/> 3–6 meses</span>
-      <span><i style={{ background: '#dc2626' }}/> 6–12 meses</span>
-      <span><i style={{ background: '#7c3aed' }}/> 12–18 meses</span>
-      <span><i style={{ background: '#475569' }}/> +18 meses</span>
+    <div className="map-legend interactive">
+      {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
       <span><i className="tech-dot"/> agenda do técnico</span>
     </div>
 
@@ -222,7 +224,7 @@ export function RetentionMap({
     <div className="retention-map">
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <FitMap points={technicianId && data.route ? [...clientPoints.filter((point) => point.near_route), ...appointmentPoints, ...data.points.filter((point) => point.kind === 'branch')] : data.points} route={data.route} />
+        <FitMap points={routeTechnicianId && data.route ? [...clientPoints.filter((point) => point.near_route), ...appointmentPoints, ...data.points.filter((point) => point.kind === 'branch')] : data.points} route={data.route} />
 
         {data.route?.geometry?.length ? <Polyline positions={data.route.geometry} pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.76 }} /> : null}
 
@@ -231,12 +233,12 @@ export function RetentionMap({
           if (!client) return null;
           const serials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
           const color = recencyColor(point.last_service_at);
-          const emphasized = Boolean(technicianId && point.near_route);
+          const emphasized = Boolean(routeTechnicianId && point.near_route);
           return <CircleMarker
             key={point.id}
             center={[point.lat, point.lng]}
-            radius={emphasized ? 8 : technicianId ? 5 : 6}
-            pathOptions={{ color: emphasized ? '#0f172a' : '#fff', weight: emphasized ? 2.5 : 1.5, fillColor: color, fillOpacity: emphasized ? 1 : technicianId ? 0.48 : 0.86 }}
+            radius={emphasized ? 8 : routeTechnicianId ? 5 : 6}
+            pathOptions={{ color: emphasized ? '#0f172a' : '#fff', weight: emphasized ? 2.5 : 1.5, fillColor: color, fillOpacity: emphasized ? 1 : routeTechnicianId ? 0.48 : 0.86 }}
           >
             <Tooltip direction="top" offset={[0, -5]}>{client.client_name}{emphasized && point.route_distance_km != null ? ` · ${point.route_distance_km} km da rota` : ''}</Tooltip>
             <Popup minWidth={250}>
@@ -250,7 +252,7 @@ export function RetentionMap({
                 <div className="map-popup-actions">
                   <button type="button" onClick={() => onOpen(client)}>Ver ficha</button>
                   <button type="button" onClick={() => onFollowup(client)}>Follow-up</button>
-                  <button type="button" className="map-primary-action" onClick={() => onSchedule(client, serials.length === 1 ? serials[0] : '', technicianId)}><CalendarPlus size={13}/> Agendar</button>
+                  <button type="button" className="map-primary-action" onClick={() => onSchedule(client, serials.length === 1 ? serials[0] : '', routeTechnicianId)}><CalendarPlus size={13}/> Agendar</button>
                 </div>
               </div>
             </Popup>
@@ -259,7 +261,7 @@ export function RetentionMap({
 
         {appointmentPoints.map((point) => {
           const plan = planningByAppointment.get(point.id.replace('appointment:', ''));
-          const selected = Boolean(technicianId && point.technician_id === technicianId);
+          const selected = Boolean(routeTechnicianId && point.technician_id === routeTechnicianId);
           const isToday = plan?.relative === 'today';
           const isTomorrow = plan?.relative === 'tomorrow';
           const label = plan?.label || (point.appointment_date ? relativeDayLabel(point.appointment_date) : 'AGENDA');
@@ -284,7 +286,8 @@ export function RetentionMap({
 
     <div className="map-footer">
       <div><MapPinned size={15}/><span>{locatedClients.toLocaleString('pt-BR')} de {requestedClients.toLocaleString('pt-BR')} clientes no mapa</span></div>
-      {technicianId && data.route && <div><Route size={15}/><span>{routeLabel}: {data.route.nearby_clients || 0} clientes até {data.route.radius_km || 30} km da rota</span></div>}
+      {routeTechnicianId && data.route && <div><Route size={15}/><span>{routeLabel}: {data.route.nearby_clients || 0} clientes até {data.route.radius_km || 30} km da rota</span></div>}
+      {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para traçar a rota</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
     <div className="map-attribution-note">Mapa © OpenStreetMap · pontos sem endereço usam a cidade como referência. A rota é apoio visual e não substitui planejamento de viagem.</div>

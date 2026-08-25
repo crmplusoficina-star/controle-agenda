@@ -4,7 +4,25 @@ import { Drawer } from './Drawer';
 import type { Appointment, MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
 
-const reasons = ['OS CLIENTE','OS CONT MAN PREV','OS GAR FABRICANTE','OS ENTREGA TÉCNICA','OS DÉBITO INTERNO','OS INSPEÇÃO CHEGADA','OS GAR FULL SERVICE','OS GAR INTERNACIONAL','OS CAMPANHA DE CAMPO','OS PRÉ ENTREGA','OS AGREGA DESAGREGA','OS PACOTE SERVIÇOS','Outro'];
+const reasons = [
+  'Garantia',
+  'Férias',
+  'Aplicação de peças',
+  'Medição material rodante',
+  'Oficina',
+  'Manutenção carro',
+  'Diagnóstico',
+  'Entrega Técnica',
+  'Revisão PMP',
+  'Revisão OS cliente',
+  'Equipamento parado',
+  'Deslocamento garantia',
+  'Deslocamento cliente',
+  'Deslocamento PMP',
+  'Folga',
+  'Sem agenda',
+  'Treinamento',
+];
 const statuses = [['planejado','Planejado'],['confirmado','Confirmado'],['em_atendimento','Em atendimento'],['concluido','Concluído'],['cancelado','Cancelado']] as const;
 
 export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, machineContext, lastHourmeter, formError, saveBusy, onSubmit, onClose, onDelete, onSelectMachine, onSerialChange }: {

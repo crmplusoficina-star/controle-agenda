@@ -18,8 +18,10 @@ import type { Appointment, Branch, ClientSummary, Followup, HistoryRow, Insight,
 import './styles.css';
 
 const ALL = '__all__';
+const MULTI_SEPARATOR = '||';
 const RETENTION_PAGE_SIZE = 1000;
 const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
+const selectedBranchValues = (filter: string) => filter === ALL ? [] : filter.split(MULTI_SEPARATOR).map((item) => item.trim()).filter(Boolean);
 
 export default function App() {
   const [view, setView] = useState<ViewName>('agenda');
@@ -51,6 +53,8 @@ export default function App() {
   const [followupDraft, setFollowupDraft] = useState<FollowupDraft | null>(null);
   const [insights, setInsights] = useState<Insight[]>([]);
   const [showInsights, setShowInsights] = useState(false);
+  const selectedBranches = selectedBranchValues(branch);
+  const defaultBranch = selectedBranches[0] || branches[0]?.name || '';
 
   useEffect(() => {
     supabase.from('app_branches').select('name').eq('active', true).order('name').then(({ data }) => {
@@ -63,11 +67,12 @@ export default function App() {
   const loadAgenda = useCallback(async () => {
     setAgendaLoading(true);
     const end = addDays(weekStart, 5);
+    const branchFilter = selectedBranchValues(branch);
     let tq = supabase.from('technicians').select('id,branch,name,active').eq('active', true).order('name');
     let aq = supabase.from('appointments').select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status').gte('appointment_date', isoDate(weekStart)).lte('appointment_date', isoDate(end)).order('appointment_date');
-    if (branch !== ALL) {
-      tq = tq.eq('branch', branch);
-      aq = aq.eq('branch', branch);
+    if (branchFilter.length) {
+      tq = tq.in('branch', branchFilter);
+      aq = aq.in('branch', branchFilter);
     }
     const [t, a] = await Promise.all([tq, aq]);
     setTechnicians((t.data || []) as Technician[]);
@@ -77,8 +82,9 @@ export default function App() {
   useEffect(() => { loadAgenda(); }, [loadAgenda]);
 
   const loadInsights = useCallback(async () => {
+    const branchFilter = selectedBranchValues(branch);
     let q = supabase.from('ai_insights').select('id,appointment_id,branch,insight_type,priority,presentation_level,title,message,status,created_at').in('status', ['new', 'viewed']).order('created_at', { ascending: false }).limit(30);
-    if (branch !== ALL) q = q.eq('branch', branch);
+    if (branchFilter.length) q = q.in('branch', branchFilter);
     const { data } = await q;
     setInsights((data || []) as Insight[]);
   }, [branch]);
@@ -87,6 +93,7 @@ export default function App() {
   useEffect(() => {
     if (view !== 'retencao') return;
     let cancelled = false;
+    const branchFilter = selectedBranchValues(branch);
 
     async function loadRetention() {
       setRetentionLoading(true);
@@ -99,7 +106,7 @@ export default function App() {
             .select('*')
             .order('last_service_at', { ascending: false })
             .range(from, from + RETENTION_PAGE_SIZE - 1);
-          if (branch !== ALL) query = query.eq('branch', branch);
+          if (branchFilter.length) query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
           const page = (data || []) as ClientSummary[];
@@ -119,7 +126,7 @@ export default function App() {
             .not('client_name', 'is', null)
             .order('appointment_date')
             .range(from, from + RETENTION_PAGE_SIZE - 1);
-          if (branch !== ALL) query = query.eq('branch', branch);
+          if (branchFilter.length) query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
           const page = (data || []) as { client_name: string | null; branch: string }[];
@@ -138,7 +145,7 @@ export default function App() {
             .not('client_name', 'is', null)
             .order('serial')
             .range(from, from + RETENTION_PAGE_SIZE - 1);
-          if (branch !== ALL) query = query.eq('branch', branch);
+          if (branchFilter.length) query = query.in('branch', branchFilter);
           const { data, error } = await query;
           if (error) throw error;
           const page = (data || []) as { serial: string; client_name: string | null; branch: string }[];
@@ -190,8 +197,9 @@ export default function App() {
   useEffect(() => {
     if (view !== 'followup') return;
     setFollowupLoading(true);
+    const branchFilter = selectedBranchValues(branch);
     let q = supabase.from('followups').select('*').order('action_date', { ascending: false }).limit(500);
-    if (branch !== ALL) q = q.eq('branch', branch);
+    if (branchFilter.length) q = q.in('branch', branchFilter);
     q.then(({ data }) => {
       setFollowups((data || []) as Followup[]);
       setFollowupLoading(false);
@@ -201,8 +209,9 @@ export default function App() {
   async function searchMachines(term: string, limit = 12) {
     const clean = term.trim();
     if (clean.length < 2) return [];
+    const branchFilter = selectedBranchValues(branch);
     let query = supabase.from('g4_machine_summary').select('*').limit(limit);
-    if (branch !== ALL) query = query.eq('branch', branch);
+    if (branchFilter.length) query = query.in('branch', branchFilter);
     const pattern = `%${clean}%`;
     const { data } = await query.or(`serial.ilike.${pattern},client_name.ilike.${pattern},city.ilike.${pattern}`);
     return (data || []) as MachineSummary[];
@@ -247,7 +256,7 @@ export default function App() {
     setFormError('');
     setMachineContext(null);
     setLastHourmeter(null);
-    setAppointmentDraft(emptyAppointment(date, technicianId, tech?.branch || (branch === ALL ? branches[0]?.name || '' : branch)));
+    setAppointmentDraft(emptyAppointment(date, technicianId, tech?.branch || defaultBranch));
   }
 
   function openEdit(item: Appointment) {
@@ -367,7 +376,7 @@ export default function App() {
 
   function newFollowup(client?: ClientSummary) {
     setFollowupDraft({
-      branch: client?.branch || (branch === ALL ? branches[0]?.name || '' : branch),
+      branch: client?.branch || defaultBranch,
       client_name: client?.client_name || '',
       equipment_serial: '',
       action_date: isoDate(new Date()),
@@ -395,7 +404,9 @@ export default function App() {
       setFollowupDraft(null);
       if (view === 'followup') {
         setFollowupLoading(true);
-        const { data } = await supabase.from('followups').select('*').order('action_date', { ascending: false });
+        let q = supabase.from('followups').select('*').order('action_date', { ascending: false });
+        if (selectedBranches.length) q = q.in('branch', selectedBranches);
+        const { data } = await q;
         setFollowups((data || []) as Followup[]);
         setFollowupLoading(false);
       }
