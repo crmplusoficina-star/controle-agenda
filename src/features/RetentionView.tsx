@@ -1,7 +1,8 @@
 import { ArrowDown, ArrowUp, Filter, List, Map, Search, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import type { Appointment, ClientSummary, Technician } from '../types';
+import { useEffect, useMemo, useState } from 'react';
+import type { Appointment, ClientSummary, Followup, Technician } from '../types';
 import { daysBetween } from '../lib/date';
+import { supabase } from '../lib/supabase';
 import { EmptyState } from '../components/EmptyState';
 import { RetentionMap } from './RetentionMap';
 import { recencyBucket, recencyColor, retentionRecency } from './retentionRecency';
@@ -11,8 +12,20 @@ import './retention.css';
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 const shortDateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
 const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
+const PAGE_SIZE = 1000;
 
-type ColumnKey = 'client' | 'serial' | 'city' | 'last' | 'machines' | 'os';
+const stageLabels: Record<string, string> = { prospectar: 'Prospectar', acompanhar: 'Acompanhar', encerrar: 'Encerrada' };
+const lostReasonLabels: Record<string, string> = {
+  sem_interesse: 'Sem interesse',
+  preco: 'Preço',
+  concorrente: 'Concorrente',
+  sem_contato: 'Sem contato',
+  adiado: 'Adiado',
+  outro: 'Outro',
+};
+const saleKindLabels: Record<string, string> = { pecas: 'Peças', servicos: 'Serviços', pecas_servicos: 'Peças + serviços' };
+
+type ColumnKey = 'client' | 'serial' | 'city' | 'last' | 'machines' | 'os' | 'treatment';
 type SortDirection = 'asc' | 'desc';
 
 type ColumnHeaderProps = {
@@ -36,13 +49,13 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
       <span>{label}</span>
       {sorted ? (sortDirection === 'asc' ? <ArrowUp size={13}/> : <ArrowDown size={13}/>) : <Filter size={13}/>} 
     </button>
-    {active && <div className={`column-menu ${column === 'machines' || column === 'os' ? 'align-right' : ''}`}>
+    {active && <div className={`column-menu ${column === 'machines' || column === 'os' || column === 'treatment' ? 'align-right' : ''}`}>
       <div className="column-menu-title">{label}</div>
       <div className="column-sort-actions">
         <button type="button" onClick={() => setSort(column, 'asc')}><ArrowUp size={14}/> {numeric ? 'Menor primeiro' : 'A → Z'}</button>
         <button type="button" onClick={() => setSort(column, 'desc')}><ArrowDown size={14}/> {numeric ? 'Maior primeiro' : 'Z → A'}</button>
       </div>
-      <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
+      <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={column === 'treatment' ? 'Ex.: Em tratativa' : numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
       {filter && <button className="clear-column-filter" type="button" onClick={() => setFilter('')}><X size={13}/> Limpar filtro</button>}
     </div>}
   </div>;
@@ -53,6 +66,23 @@ function RecencyLegend({ active, onChange }: { active: RecencyBucket | null; onC
     {retentionRecency.map((item) => <button type="button" key={item.key} className={active === item.key ? 'active' : ''} onClick={() => onChange(active === item.key ? null : item.key)} title={active === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/><span>{item.label}</span></button>)}
     {active && <button type="button" className="clear-recency" onClick={() => onChange(null)}><X size={12}/> Limpar</button>}
   </div>;
+}
+
+function treatmentStatus(item?: Followup) {
+  if (!item) return { label: 'Sem tratativa', detail: 'Nunca trabalhado', kind: 'none' as const, open: false };
+  if (item.stage !== 'encerrar') {
+    const owner = item.updated_by_name || item.created_by_name || '';
+    return { label: 'Em tratativa', detail: `${stageLabels[item.stage] || 'Prospectar'}${owner ? ` · ${owner}` : ''}`, kind: 'open' as const, open: true };
+  }
+  if (item.result === 'venda_ganha') {
+    const kind = item.sale_kind ? saleKindLabels[item.sale_kind] || '' : '';
+    return { label: 'Venda ganha', detail: kind || (item.updated_by_name || item.created_by_name || 'Encerrada'), kind: 'won' as const, open: false };
+  }
+  if (item.result === 'venda_perdida') {
+    const reason = item.lost_reason ? lostReasonLabels[item.lost_reason] || '' : '';
+    return { label: 'Venda perdida', detail: reason || (item.updated_by_name || item.created_by_name || 'Encerrada'), kind: 'lost' as const, open: false };
+  }
+  return { label: 'Encerrada', detail: item.updated_by_name || item.created_by_name || '', kind: 'closed' as const, open: false };
 }
 
 export function RetentionView({ clients, loading, futureClients, serialsByClient, appointments, technicians, weekStart, onFollowup, onOpen, onSchedule }: {
@@ -73,9 +103,57 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
   const [sortKey, setSortKey] = useState<ColumnKey>('last');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', last: '', machines: '', os: '' });
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', last: '', machines: '', os: '', treatment: '' });
+  const [treatments, setTreatments] = useState<Record<string, Followup>>({});
+
+  const clientBranchesKey = useMemo(() => Array.from(new Set(clients.map((client) => client.branch))).sort().join('|'), [clients]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const branchNames = clientBranchesKey ? clientBranchesKey.split('|').filter(Boolean) : [];
+    if (!branchNames.length) {
+      setTreatments({});
+      return;
+    }
+
+    async function loadTreatmentSummary() {
+      const rows: Followup[] = [];
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error } = await supabase.from('followups').select('*').in('branch', branchNames).order('updated_at', { ascending: false }).range(from, from + PAGE_SIZE - 1);
+        if (error) {
+          console.error('retention_followups_failed', error);
+          return;
+        }
+        const page = (data || []) as Followup[];
+        rows.push(...page);
+        if (page.length < PAGE_SIZE) break;
+      }
+      if (cancelled) return;
+
+      const open: Record<string, Followup> = {};
+      const closed: Record<string, Followup> = {};
+      for (const item of rows) {
+        const key = retentionKey(item.client_name, item.branch);
+        if (item.stage !== 'encerrar') {
+          if (!open[key]) open[key] = item;
+        } else if (!closed[key]) {
+          closed[key] = item;
+        }
+      }
+      const summary: Record<string, Followup> = { ...closed, ...open };
+      setTreatments(summary);
+    }
+
+    void loadTreatmentSummary();
+    return () => { cancelled = true; };
+  }, [clientBranchesKey]);
 
   function serialsFor(client: ClientSummary) { return serialsByClient[retentionKey(client.client_name, client.branch)] || []; }
+  function treatmentFor(client: ClientSummary) { return treatments[retentionKey(client.client_name, client.branch)]; }
+  function treatmentText(client: ClientSummary) {
+    const state = treatmentStatus(treatmentFor(client));
+    return `${state.label} ${state.detail}`.trim();
+  }
   function updateFilter(column: ColumnKey, value: string) { setFilters((current) => ({ ...current, [column]: value })); }
   function updateSort(column: ColumnKey, direction: SortDirection) { setSortKey(column); setSortDirection(direction); setActiveColumn(null); }
   function applyRecencyFilter(bucket: RecencyBucket | null) { setRecencyFilter(bucket); }
@@ -87,7 +165,8 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       if (recencyFilter && recencyBucket(client.last_service_at) !== recencyFilter) return false;
       const clientSerials = serialsFor(client);
       const serialText = clientSerials.join(' ');
-      const globalText = `${client.client_name} ${client.city || ''} ${serialText}`.toLowerCase();
+      const treatment = treatmentText(client);
+      const globalText = `${client.client_name} ${client.city || ''} ${serialText} ${treatment}`.toLowerCase();
       if (search && !globalText.includes(search.toLowerCase())) return false;
       if (futureClients.has(retentionKey(client.client_name, client.branch))) return false;
       const formattedDate = dateFmt.format(lastDate);
@@ -96,7 +175,8 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         (!filters.city || (client.city || '').toLowerCase().includes(filters.city.toLowerCase())) &&
         (!filters.last || formattedDate.includes(filters.last)) &&
         (!filters.machines || String(client.machine_count).includes(filters.machines.trim())) &&
-        (!filters.os || String(client.service_count).includes(filters.os.trim()));
+        (!filters.os || String(client.service_count).includes(filters.os.trim())) &&
+        (!filters.treatment || treatment.toLowerCase().includes(filters.treatment.toLowerCase()));
     });
     const direction = sortDirection === 'asc' ? 1 : -1;
     rows.sort((a, b) => {
@@ -107,11 +187,12 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       if (sortKey === 'last') { av = a.last_service_at ? new Date(a.last_service_at).getTime() : 0; bv = b.last_service_at ? new Date(b.last_service_at).getTime() : 0; }
       if (sortKey === 'machines') { av = a.machine_count; bv = b.machine_count; }
       if (sortKey === 'os') { av = a.service_count; bv = b.service_count; }
+      if (sortKey === 'treatment') { av = treatmentText(a); bv = treatmentText(b); }
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * direction;
       return String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
     });
     return rows;
-  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection]);
+  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection, treatments]);
 
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 5);
   const weekLabel = `Agenda ${shortDateFmt.format(weekStart)}–${shortDateFmt.format(weekEnd)}`;
@@ -137,12 +218,15 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         <ColumnHeader column="last" label="Último atendimento" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.last} setFilter={(value) => updateFilter('last', value)}/>
         <ColumnHeader column="machines" label="Máquinas" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.machines} setFilter={(value) => updateFilter('machines', value)} numeric/>
         <ColumnHeader column="os" label="OS" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.os} setFilter={(value) => updateFilter('os', value)} numeric/>
+        <ColumnHeader column="treatment" label="Tratativa" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.treatment} setFilter={(value) => updateFilter('treatment', value)}/>
         <span></span>
       </div>
       {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text="Nenhum cliente corresponde aos filtros aplicados." /> : filtered.map((client) => {
         const days = client.last_service_at ? daysBetween(client.last_service_at.slice(0, 10)) : 0;
         const serials = serialsFor(client);
         const serialText = serials.length ? serials.join(', ') : '—';
+        const treatment = treatmentStatus(treatmentFor(client));
+        const actionLabel = treatment.open ? 'Abrir tratativa' : treatment.kind === 'none' ? 'Criar tratativa' : 'Nova tratativa';
         return <div className="table-row retention-columns retention-click-row" key={client.client_key} role="button" tabIndex={0} onClick={() => onOpen(client)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(client); }}>
           <div><div className="retention-client-line"><i className="retention-row-dot" style={{ background: recencyColor(client.last_service_at) }}/><strong>{client.client_name}</strong></div><small>{client.last_operation_type || 'Última operação não informada'}</small></div>
           <div className="series-cell" title={serialText}><strong>{serialText}</strong></div>
@@ -150,7 +234,8 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
           <div><strong>{client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : '—'}</strong><small>{days ? `${Math.floor(days / 30)} meses atrás` : ''}</small></div>
           <strong>{client.machine_count}</strong>
           <strong>{client.service_count}</strong>
-          <button className="row-action" onClick={(event) => { event.stopPropagation(); onFollowup(client); }}>Criar follow-up</button>
+          <div className={`treatment-summary treatment-${treatment.kind}`}><strong>{treatment.label}</strong><small>{treatment.detail}</small></div>
+          <button className="row-action" onClick={(event) => { event.stopPropagation(); onFollowup(client); }}>{actionLabel}</button>
         </div>;
       })}
     </div>}
