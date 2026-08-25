@@ -88,6 +88,10 @@ export type Followup = {
   parts_value: number | null;
   services_value: number | null;
   lost_reason: FollowupLostReason;
+  created_by_matricula: string | null;
+  created_by_name: string | null;
+  updated_by_matricula: string | null;
+  updated_by_name: string | null;
   created_at: string;
   updated_at: string;
 };
