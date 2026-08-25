@@ -69,6 +69,7 @@ export type HistoryRow = {
 export type FollowupStage = 'prospectar' | 'acompanhar' | 'encerrar';
 export type FollowupResult = 'venda_ganha' | 'venda_perdida' | null;
 export type FollowupSaleKind = 'pecas' | 'servicos' | 'pecas_servicos' | null;
+export type FollowupLostReason = 'sem_interesse' | 'preco' | 'concorrente' | 'sem_contato' | 'adiado' | 'outro' | null;
 
 export type Followup = {
   id: string;
@@ -86,6 +87,7 @@ export type Followup = {
   sale_kind: FollowupSaleKind;
   parts_value: number | null;
   services_value: number | null;
+  lost_reason: FollowupLostReason;
   created_at: string;
   updated_at: string;
 };
