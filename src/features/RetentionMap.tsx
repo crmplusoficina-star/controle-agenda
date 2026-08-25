@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { CalendarPlus, Loader2, MapPinned, RefreshCw, Route } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -66,6 +66,17 @@ function relativeDayLabel(dateValue: string) {
   if (dateValue === localIso(tomorrow)) return 'AMANHÃ';
   const date = new Date(`${dateValue}T12:00:00`);
   return shortDayFmt.format(date).replace('.', '').toUpperCase();
+}
+
+function cityClusterIcon(count: number) {
+  const size = Math.min(64, 38 + Math.round(Math.log2(Math.max(2, count)) * 5));
+  return L.divIcon({
+    className: 'retention-city-cluster-icon',
+    html: `<div class="retention-city-cluster-bubble"><strong>${count}</strong><span>clientes</span></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -(size / 2)],
+  });
 }
 
 function FitMap({ points, route }: { points: MapPoint[]; route: MapResponse['route'] }) {
@@ -189,8 +200,30 @@ export function RetentionMap({
     ? scheduledTechnicians.find((technician) => technician.id === routeTechnicianId)?.name || 'Técnico selecionado'
     : '';
 
-  const clientPoints = data.points.filter((point) => point.kind === 'client');
-  const appointmentPoints = data.points.filter((point) => point.kind === 'appointment' && (!technicianIds.length || (point.technician_id && technicianIds.includes(point.technician_id))));
+  const clientPoints = useMemo(() => data.points.filter((point) => point.kind === 'client'), [data.points]);
+  const appointmentPoints = useMemo(() => data.points.filter((point) => point.kind === 'appointment' && (!technicianIds.length || (point.technician_id && technicianIds.includes(point.technician_id)))), [data.points, technicianIds]);
+  const cityClusters = useMemo(() => {
+    const groups = new Map<string, MapPoint[]>();
+    for (const point of clientPoints) {
+      if (point.precision !== 'city' || !point.city) continue;
+      const key = `${String(point.branch || '').trim().toUpperCase()}|${point.city.trim().toUpperCase()}`;
+      const group = groups.get(key) || [];
+      group.push(point);
+      groups.set(key, group);
+    }
+    return Array.from(groups.entries())
+      .filter(([, points]) => points.length > 1)
+      .map(([key, points]) => ({
+        key,
+        points,
+        city: points[0].city || 'Cidade não informada',
+        branch: points[0].branch || '',
+        lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
+        lng: points.reduce((sum, point) => sum + point.lng, 0) / points.length,
+        nearRouteCount: points.filter((point) => point.near_route).length,
+      }));
+  }, [clientPoints]);
+  const clusteredClientIds = useMemo(() => new Set(cityClusters.flatMap((cluster) => cluster.points.map((point) => point.id))), [cityClusters]);
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
 
@@ -216,6 +249,7 @@ export function RetentionMap({
     <div className="map-legend interactive">
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
       <span><i className="tech-dot"/> agenda do técnico</span>
+      <span><i className="city-cluster-legend"/> vários clientes na cidade</span>
     </div>
 
     {error && <div className="map-message error">{error}</div>}
@@ -228,7 +262,39 @@ export function RetentionMap({
 
         {data.route?.geometry?.length ? <Polyline positions={data.route.geometry} pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.76 }} /> : null}
 
+        {cityClusters.map((cluster) => {
+          const clusterClients = cluster.points
+            .map((point) => point.client_key ? clientByKey.get(point.client_key) : undefined)
+            .filter((client): client is ClientSummary => Boolean(client));
+          const recencyCounts = retentionRecency.map((item) => ({
+            ...item,
+            count: cluster.points.filter((point) => recencyColor(point.last_service_at) === item.color).length,
+          })).filter((item) => item.count > 0);
+          return <Marker key={cluster.key} position={[cluster.lat, cluster.lng]} icon={cityClusterIcon(cluster.points.length)}>
+            <Tooltip direction="top" offset={[0, -12]}>{cluster.city} · {cluster.points.length} clientes</Tooltip>
+            <Popup minWidth={300} maxWidth={340}>
+              <div className="map-popup-card city-cluster-card">
+                <strong>{cluster.city}</strong>
+                <span>{cluster.points.length} clientes com localização aproximada pela cidade</span>
+                {routeTechnicianId && cluster.nearRouteCount > 0 && <small className="near-route-note">{cluster.nearRouteCount} cliente{cluster.nearRouteCount === 1 ? '' : 's'} próximo{cluster.nearRouteCount === 1 ? '' : 's'} da rota selecionada</small>}
+                <div className="city-cluster-recency">
+                  {recencyCounts.map((item) => <span key={item.key}><i style={{ background: item.color }}/><strong>{item.count}</strong> {item.label}</span>)}
+                </div>
+                <div className="city-cluster-client-list">
+                  {clusterClients.slice(0, 8).map((client) => <button type="button" key={client.client_key} onClick={() => onOpen(client)}>
+                    <span>{client.client_name}</span>
+                    <small>{client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : 'Sem data'} · {client.machine_count} máquina{client.machine_count === 1 ? '' : 's'}</small>
+                  </button>)}
+                </div>
+                {clusterClients.length > 8 && <small className="city-cluster-more">+{clusterClients.length - 8} outros clientes nesta cidade</small>}
+                <small>Os pontos são agrupados porque o G4 informa apenas a cidade, sem endereço preciso.</small>
+              </div>
+            </Popup>
+          </Marker>;
+        })}
+
         {clientPoints.map((point) => {
+          if (clusteredClientIds.has(point.id)) return null;
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
           if (!client) return null;
           const serials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
@@ -290,6 +356,6 @@ export function RetentionMap({
       {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para traçar a rota</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · pontos sem endereço usam a cidade como referência. A rota é apoio visual e não substitui planejamento de viagem.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · pontos sem endereço são agrupados pela cidade. A rota é apoio visual e não substitui planejamento de viagem.</div>
   </div>;
 }
