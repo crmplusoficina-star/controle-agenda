@@ -66,6 +66,10 @@ export type HistoryRow = {
   description: string | null;
 };
 
+export type FollowupStage = 'prospectar' | 'acompanhar' | 'encerrar';
+export type FollowupResult = 'venda_ganha' | 'venda_perdida' | null;
+export type FollowupSaleKind = 'pecas' | 'servicos' | 'pecas_servicos' | null;
+
 export type Followup = {
   id: string;
   branch: string;
@@ -77,6 +81,13 @@ export type Followup = {
   estimated_value: number | null;
   next_followup_date: string | null;
   notes: string | null;
+  stage: FollowupStage;
+  result: FollowupResult;
+  sale_kind: FollowupSaleKind;
+  parts_value: number | null;
+  services_value: number | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Insight = {
