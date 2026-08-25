@@ -1,6 +1,8 @@
-import { Bell } from 'lucide-react';
+import { Bell, LogOut } from 'lucide-react';
 import { CheckboxMultiSelect } from './CheckboxMultiSelect';
+import { useSession } from '../session';
 import type { Branch, Insight, ViewName } from '../types';
+import './session.css';
 
 const titles: Record<ViewName, { title: string; subtitle: string }> = {
   agenda: { title: 'Agenda', subtitle: 'Organize o atendimento sem perder o contexto.' },
@@ -21,6 +23,7 @@ export function Topbar({ view, branches, branch, onBranch, insights, onBell }: {
   const meta = titles[view];
   const unread = insights.filter((i) => i.status === 'new').length;
   const selected = branch === '__all__' ? [] : branch.split(MULTI_SEPARATOR).filter(Boolean);
+  const { user, logout } = useSession();
 
   return (
     <header className="topbar">
@@ -38,6 +41,10 @@ export function Topbar({ view, branches, branch, onBranch, insights, onBell }: {
           <Bell size={19} />
           {unread > 0 && <span className="bell-count">{unread}</span>}
         </button>
+        <div className="topbar-user" title={`${user.name} · matrícula ${user.matricula}`}>
+          <div className="topbar-user-copy"><strong>{user.name}</strong><span>{user.role}</span></div>
+          <button className="logout-button" type="button" onClick={logout} aria-label="Sair"><LogOut size={15}/></button>
+        </div>
       </div>
     </header>
   );
