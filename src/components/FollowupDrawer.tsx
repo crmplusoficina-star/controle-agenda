@@ -12,10 +12,11 @@ function amount(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function FollowupDrawer({ draft, setDraft, branches, onClose, onSubmit }: {
+export function FollowupDrawer({ draft, setDraft, branches, error, onClose, onSubmit }: {
   draft: FollowupDraft | null;
   setDraft: (draft: FollowupDraft) => void;
   branches: Branch[];
+  error?: string;
   onClose: () => void;
   onSubmit: (e: FormEvent) => void;
 }) {
@@ -99,6 +100,7 @@ export function FollowupDrawer({ draft, setDraft, branches, onClose, onSubmit }:
         </>}
       </div>}
 
+      {error && <div className="form-error">{error}</div>}
       <div className="drawer-actions"><span/><button type="button" className="subtle-button" onClick={onClose}>Cancelar</button><button className="primary-button">{draft.id ? 'Atualizar' : 'Salvar'}</button></div>
     </form>
   </Drawer>;
