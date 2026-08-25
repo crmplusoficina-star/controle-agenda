@@ -25,6 +25,9 @@ export type MapPoint = {
   client_key?: string;
   client_name?: string | null;
   city?: string | null;
+  state?: string | null;
+  location_source?: string | null;
+  location_label?: string | null;
   last_service_at?: string | null;
   appointment_date?: string;
   technician_id?: string;
@@ -214,9 +217,11 @@ export function RetentionMap({
   const cityClusters = useMemo(() => {
     const groups = new Map<string, MapPoint[]>();
     for (const point of clientPoints) {
-      if (!point.city) continue;
-      const key = normalizeCity(point.city);
-      if (!key) continue;
+      if (point.precision !== 'city' || !point.city) continue;
+      const cityKey = normalizeCity(point.city);
+      const stateKey = String(point.state || '').trim().toUpperCase();
+      if (!cityKey) continue;
+      const key = `${cityKey}|${stateKey}`;
       const group = groups.get(key) || [];
       group.push(point);
       groups.set(key, group);
@@ -227,10 +232,11 @@ export function RetentionMap({
         key,
         points,
         city: points[0].city || 'Cidade não informada',
-        lat: points.reduce((sum, point) => sum + point.lat, 0) / points.length,
-        lng: points.reduce((sum, point) => sum + point.lng, 0) / points.length,
+        state: points[0].state || '',
+        lat: points[0].lat,
+        lng: points[0].lng,
         nearRouteCount: points.filter((point) => point.near_route).length,
-        approximateCount: points.filter((point) => point.precision === 'city').length,
+        approximateCount: points.length,
       }));
   }, [clientPoints]);
   const clusteredClientIds = useMemo(() => new Set(cityClusters.flatMap((cluster) => cluster.points.map((point) => point.id))), [cityClusters]);
@@ -259,7 +265,7 @@ export function RetentionMap({
     <div className="map-legend interactive">
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
       <span><i className="tech-dot"/> agenda do técnico</span>
-      <span><i className="city-cluster-legend"/> vários clientes na cidade</span>
+      <span><i className="city-cluster-legend"/> clientes sem endereço exato na cidade</span>
     </div>
 
     {error && <div className="map-message error">{error}</div>}
@@ -281,12 +287,11 @@ export function RetentionMap({
             count: cluster.points.filter((point) => recencyColor(point.last_service_at) === item.color).length,
           })).filter((item) => item.count > 0);
           return <Marker key={cluster.key} position={[cluster.lat, cluster.lng]} icon={cityClusterIcon(cluster.points.length)}>
-            <Tooltip direction="top" offset={[0, -12]}>{cluster.city} · {cluster.points.length} clientes</Tooltip>
+            <Tooltip direction="top" offset={[0, -12]}>{cluster.city}{cluster.state ? ` - ${cluster.state}` : ''} · {cluster.points.length} clientes</Tooltip>
             <Popup minWidth={300} maxWidth={340}>
               <div className="map-popup-card city-cluster-card">
-                <strong>{cluster.city}</strong>
-                <span>{cluster.points.length} clientes nesta cidade</span>
-                {cluster.approximateCount > 0 && <small>{cluster.approximateCount} cliente{cluster.approximateCount === 1 ? '' : 's'} sem endereço exato no G4</small>}
+                <strong>{cluster.city}{cluster.state ? ` - ${cluster.state}` : ''}</strong>
+                <span>{cluster.points.length} clientes sem endereço exato nesta cidade</span>
                 {routeTechnicianId && cluster.nearRouteCount > 0 && <small className="near-route-note">{cluster.nearRouteCount} cliente{cluster.nearRouteCount === 1 ? '' : 's'} próximo{cluster.nearRouteCount === 1 ? '' : 's'} da rota selecionada</small>}
                 <div className="city-cluster-recency">
                   {recencyCounts.map((item) => <span key={item.key}><i style={{ background: item.color }}/><strong>{item.count}</strong> {item.label}</span>)}
@@ -298,7 +303,7 @@ export function RetentionMap({
                   </button>)}
                 </div>
                 {clusterClients.length > 8 && <small className="city-cluster-more">+{clusterClients.length - 8} outros clientes nesta cidade</small>}
-                <small>A bolha reúne os clientes da mesma cidade para manter o mapa legível.</small>
+                <small>Esta bolha usa somente a cidade porque não há endereço confiável para esses clientes.</small>
               </div>
             </Popup>
           </Marker>;
@@ -324,6 +329,7 @@ export function RetentionMap({
                 <span>{client.city || 'Cidade não informada'} · {serials.length} máquina{serials.length === 1 ? '' : 's'}</span>
                 <small>{point.last_service_at ? `Último atendimento: ${dateFmt.format(new Date(point.last_service_at))}` : 'Sem data de atendimento'}</small>
                 {point.precision === 'city' && <small>Localização aproximada pela cidade</small>}
+                {point.precision !== 'city' && point.location_label && <small>Endereço localizado: {point.location_label}</small>}
                 {emphasized && point.route_distance_km != null && <small className="near-route-note">Aprox. {point.route_distance_km} km da rota do técnico</small>}
                 {serials.length > 0 && <small className="map-popup-serial">{serials.slice(0, 2).join(' · ')}{serials.length > 2 ? ` +${serials.length - 2}` : ''}</small>}
                 <div className="map-popup-actions">
@@ -352,6 +358,7 @@ export function RetentionMap({
                 <small>{point.client_name || 'Cliente não informado'}</small>
                 {point.equipment_serial && <small>{point.equipment_serial}</small>}
                 {point.precision === 'city' && <small>Posição aproximada pela cidade</small>}
+                {point.precision !== 'city' && point.location_label && <small>{point.location_label}</small>}
               </div>
             </Popup>
           </CircleMarker>;
@@ -367,6 +374,6 @@ export function RetentionMap({
       {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para traçar a rota</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes da mesma cidade são agrupados para evitar sobreposição. A rota é apoio visual e não substitui planejamento de viagem.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · endereço confiável aparece como ponto individual; sem endereço, o cliente fica agrupado somente pela cidade e UF.</div>
   </div>;
 }
