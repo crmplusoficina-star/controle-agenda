@@ -1,10 +1,9 @@
-import { CalendarRange, History, ListTodo, Wrench } from 'lucide-react';
+import { CalendarRange, History, ListTodo } from 'lucide-react';
 import type { ViewName } from '../types';
 
 const items: { id: ViewName; label: string; icon: typeof CalendarRange }[] = [
   { id: 'agenda', label: 'Agenda', icon: CalendarRange },
   { id: 'retencao', label: 'Retenção', icon: History },
-  { id: 'equipamentos', label: 'Equipamentos', icon: Wrench },
   { id: 'followup', label: 'Follow-up', icon: ListTodo },
 ];
 
