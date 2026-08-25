@@ -28,6 +28,21 @@ const saleKindLabels: Record<string, string> = { pecas: 'Peças', servicos: 'Ser
 type ColumnKey = 'client' | 'serial' | 'city' | 'last' | 'machines' | 'os' | 'treatment';
 type SortDirection = 'asc' | 'desc';
 
+type ClientCitySummary = {
+  city_key: string;
+  client_key: string;
+  client_name: string;
+  branch: string;
+  city: string;
+  first_service_at: string | null;
+  last_service_at: string | null;
+  service_count: number;
+  machine_count: number;
+  serials: string[];
+  last_operation_type: string | null;
+  last_description: string | null;
+};
+
 type ColumnHeaderProps = {
   column: ColumnKey;
   label: string;
@@ -40,6 +55,14 @@ type ColumnHeaderProps = {
   setFilter: (value: string) => void;
   numeric?: boolean;
 };
+
+function foldText(value: string | null | undefined) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
 
 function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, sortDirection, setSort, filter, setFilter, numeric }: ColumnHeaderProps) {
   const active = activeColumn === column;
@@ -105,6 +128,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', last: '', machines: '', os: '', treatment: '' });
   const [treatments, setTreatments] = useState<Record<string, Followup>>({});
+  const [citySummaries, setCitySummaries] = useState<Record<string, ClientCitySummary[]>>({});
 
   const clientBranchesKey = useMemo(() => Array.from(new Set(clients.map((client) => client.branch))).sort().join('|'), [clients]);
 
@@ -113,6 +137,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     const branchNames = clientBranchesKey ? clientBranchesKey.split('|').filter(Boolean) : [];
     if (!branchNames.length) {
       setTreatments({});
+      setCitySummaries({});
       return;
     }
 
@@ -140,15 +165,73 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
           closed[key] = item;
         }
       }
-      const summary: Record<string, Followup> = { ...closed, ...open };
-      setTreatments(summary);
+      setTreatments({ ...closed, ...open });
+    }
+
+    async function loadCitySummaries() {
+      const rows: ClientCitySummary[] = [];
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('g4_client_city_summary')
+          .select('city_key,client_key,client_name,branch,city,first_service_at,last_service_at,service_count,machine_count,serials,last_operation_type,last_description')
+          .in('branch', branchNames)
+          .order('last_service_at', { ascending: false })
+          .range(from, from + PAGE_SIZE - 1);
+        if (error) {
+          console.error('retention_city_summary_failed', error);
+          return;
+        }
+        const page = (data || []) as ClientCitySummary[];
+        rows.push(...page);
+        if (page.length < PAGE_SIZE) break;
+      }
+      if (cancelled) return;
+      const grouped: Record<string, ClientCitySummary[]> = {};
+      for (const row of rows) {
+        const bucket = grouped[row.client_key] || [];
+        bucket.push(row);
+        grouped[row.client_key] = bucket;
+      }
+      setCitySummaries(grouped);
     }
 
     void loadTreatmentSummary();
+    void loadCitySummaries();
     return () => { cancelled = true; };
   }, [clientBranchesKey]);
 
-  function serialsFor(client: ClientSummary) { return serialsByClient[retentionKey(client.client_name, client.branch)] || []; }
+  const cityNeedle = foldText(filters.city);
+
+  function cityContextFor(client: ClientSummary) {
+    if (!cityNeedle) return null;
+    return (citySummaries[client.client_key] || []).find((row) => foldText(row.city).includes(cityNeedle)) || null;
+  }
+
+  function effectiveClientFor(client: ClientSummary): ClientSummary {
+    const cityContext = cityContextFor(client);
+    if (!cityContext) return client;
+    return {
+      ...client,
+      city: cityContext.city,
+      first_service_at: cityContext.first_service_at,
+      last_service_at: cityContext.last_service_at,
+      service_count: cityContext.service_count,
+      machine_count: cityContext.machine_count,
+      last_operation_type: cityContext.last_operation_type,
+      last_description: cityContext.last_description,
+    };
+  }
+
+  function serialsFor(client: ClientSummary) {
+    const cityContext = cityContextFor(client);
+    if (cityContext) return cityContext.serials || [];
+    return serialsByClient[retentionKey(client.client_name, client.branch)] || [];
+  }
+
+  function citiesForSearch(client: ClientSummary) {
+    return (citySummaries[client.client_key] || []).map((row) => row.city).join(' ');
+  }
+
   function treatmentFor(client: ClientSummary) { return treatments[retentionKey(client.client_name, client.branch)]; }
   function treatmentText(client: ClientSummary) {
     const state = treatmentStatus(treatmentFor(client));
@@ -159,25 +242,28 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   function applyRecencyFilter(bucket: RecencyBucket | null) { setRecencyFilter(bucket); }
 
   const filtered = useMemo(() => {
-    const rows = clients.filter((client) => {
-      if (!client.last_service_at) return !recencyFilter || recencyFilter === '18+';
-      const lastDate = new Date(client.last_service_at);
-      if (recencyFilter && recencyBucket(client.last_service_at) !== recencyFilter) return false;
+    const rows = clients.flatMap((original) => {
+      const cityContext = cityContextFor(original);
+      if (cityNeedle && !cityContext) return [];
+      const client = cityContext ? effectiveClientFor(original) : original;
+      if (!client.last_service_at) return (!recencyFilter || recencyFilter === '18+') ? [client] : [];
+      if (recencyFilter && recencyBucket(client.last_service_at) !== recencyFilter) return [];
       const clientSerials = serialsFor(client);
       const serialText = clientSerials.join(' ');
       const treatment = treatmentText(client);
-      const globalText = `${client.client_name} ${client.city || ''} ${serialText} ${treatment}`.toLowerCase();
-      if (search && !globalText.includes(search.toLowerCase())) return false;
-      if (futureClients.has(retentionKey(client.client_name, client.branch))) return false;
-      const formattedDate = dateFmt.format(lastDate);
-      return (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
+      const globalText = `${client.client_name} ${client.city || ''} ${citiesForSearch(original)} ${serialText} ${treatment}`.toLowerCase();
+      if (search && !globalText.includes(search.toLowerCase())) return [];
+      if (futureClients.has(retentionKey(client.client_name, client.branch))) return [];
+      const formattedDate = dateFmt.format(new Date(client.last_service_at));
+      const matches = (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
         (!filters.serial || serialText.toLowerCase().includes(filters.serial.toLowerCase())) &&
-        (!filters.city || (client.city || '').toLowerCase().includes(filters.city.toLowerCase())) &&
         (!filters.last || formattedDate.includes(filters.last)) &&
         (!filters.machines || String(client.machine_count).includes(filters.machines.trim())) &&
         (!filters.os || String(client.service_count).includes(filters.os.trim())) &&
         (!filters.treatment || treatment.toLowerCase().includes(filters.treatment.toLowerCase()));
+      return matches ? [client] : [];
     });
+
     const direction = sortDirection === 'asc' ? 1 : -1;
     rows.sort((a, b) => {
       let av: string | number = ''; let bv: string | number = '';
@@ -192,7 +278,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       return String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
     });
     return rows;
-  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection, treatments]);
+  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection, treatments, citySummaries, cityNeedle]);
 
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 5);
   const weekLabel = `Agenda ${shortDateFmt.format(weekStart)}–${shortDateFmt.format(weekEnd)}`;
