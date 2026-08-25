@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import type { Appointment, Technician } from '../types';
 import { addDays, isoDate } from '../lib/date';
@@ -29,7 +30,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
   const dragRef = useRef({ active: false, startX: 0, scrollLeft: 0 });
   const [dragging, setDragging] = useState(false);
 
-  function startDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
     if (target.closest('button, input, select, textarea, a')) return;
     const shell = shellRef.current;
@@ -39,13 +40,13 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
     shell.setPointerCapture(event.pointerId);
   }
 
-  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const shell = shellRef.current;
     if (!shell || !dragRef.current.active) return;
     shell.scrollLeft = dragRef.current.scrollLeft - (event.clientX - dragRef.current.startX);
   }
 
-  function stopDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function stopDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const shell = shellRef.current;
     dragRef.current.active = false;
     setDragging(false);
