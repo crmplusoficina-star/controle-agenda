@@ -4,6 +4,8 @@ import type { Appointment, ClientSummary, Technician } from '../types';
 import { daysBetween } from '../lib/date';
 import { EmptyState } from '../components/EmptyState';
 import { RetentionMap } from './RetentionMap';
+import { recencyBucket, recencyColor, retentionRecency } from './retentionRecency';
+import type { RecencyBucket } from './retentionRecency';
 import './retention.css';
 
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -49,6 +51,21 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
   </div>;
 }
 
+function RecencyLegend({ active, onChange, className = '' }: { active: RecencyBucket | null; onChange: (bucket: RecencyBucket | null) => void; className?: string }) {
+  return <div className={`retention-recency-legend ${className}`}>
+    {retentionRecency.map((item) => <button
+      type="button"
+      key={item.key}
+      className={active === item.key ? 'active' : ''}
+      onClick={() => onChange(active === item.key ? null : item.key)}
+      title={active === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}
+    >
+      <i style={{ background: item.color }}/><span>{item.label}</span>
+    </button>)}
+    {active && <button type="button" className="clear-recency" onClick={() => onChange(null)}><X size={12}/> Limpar</button>}
+  </div>;
+}
+
 export function RetentionView({ clients, loading, futureClients, serialsByClient, appointments, technicians, weekStart, onFollowup, onOpen, onSchedule }: {
   clients: ClientSummary[];
   loading: boolean;
@@ -64,6 +81,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const [months, setMonths] = useState(6);
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'list' | 'map'>('list');
+  const [recencyFilter, setRecencyFilter] = useState<RecencyBucket | null>(null);
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
   const [sortKey, setSortKey] = useState<ColumnKey>('last');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -92,9 +110,10 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     }
 
     const rows = clients.filter((client) => {
-      if (!client.last_service_at) return months === 0;
+      if (!client.last_service_at) return months === 0 && (!recencyFilter || recencyFilter === '18+');
       const lastDate = new Date(client.last_service_at);
       if (months > 0 && (lastDate < cutoff || lastDate > now)) return false;
+      if (recencyFilter && recencyBucket(client.last_service_at) !== recencyFilter) return false;
 
       const clientSerials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
       const serialText = clientSerials.join(' ');
@@ -103,7 +122,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       const hasFuture = futureClients.has(retentionKey(client.client_name, client.branch));
       if (!matchSearch || hasFuture) return false;
 
-      const formattedDate = lastDate ? dateFmt.format(lastDate) : '';
+      const formattedDate = dateFmt.format(lastDate);
       return (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
         (!filters.serial || serialText.toLowerCase().includes(filters.serial.toLowerCase())) &&
         (!filters.city || (client.city || '').toLowerCase().includes(filters.city.toLowerCase())) &&
@@ -126,7 +145,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       return String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
     });
     return rows;
-  }, [clients, months, search, futureClients, serialsByClient, filters, sortKey, sortDirection]);
+  }, [clients, months, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection]);
 
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 5);
@@ -144,7 +163,9 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       </div>
     </div>
 
-    {mode === 'map' ? <RetentionMap clients={filtered} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} onOpen={onOpen} onFollowup={onFollowup} onSchedule={onSchedule} /> : <div className="table-shell retention-table">
+    {mode === 'list' && <RecencyLegend active={recencyFilter} onChange={setRecencyFilter}/>} 
+
+    {mode === 'map' ? <RetentionMap clients={filtered} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={setRecencyFilter} onOpen={onOpen} onFollowup={onFollowup} onSchedule={onSchedule} /> : <div className="table-shell retention-table">
       <div className="table-head retention-columns retention-head">
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
@@ -159,7 +180,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         const serials = serialsFor(client);
         const serialText = serials.length ? serials.join(', ') : '—';
         return <div className="table-row retention-columns retention-click-row" key={client.client_key} role="button" tabIndex={0} onClick={() => onOpen(client)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(client); }}>
-          <div><strong>{client.client_name}</strong><small>{client.last_operation_type || 'Última operação não informada'}</small></div>
+          <div><div className="retention-client-line"><i className="retention-row-dot" style={{ background: recencyColor(client.last_service_at) }}/><strong>{client.client_name}</strong></div><small>{client.last_operation_type || 'Última operação não informada'}</small></div>
           <div className="series-cell" title={serialText}><strong>{serialText}</strong></div>
           <span>{client.city || '—'}</span>
           <div><strong>{client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : '—'}</strong><small>{days ? `${Math.floor(days / 30)} meses atrás` : ''}</small></div>
