@@ -1,11 +1,13 @@
-import { ArrowDown, ArrowUp, Filter, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Filter, List, Map, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { ClientSummary } from '../types';
+import type { Appointment, ClientSummary, Technician } from '../types';
 import { daysBetween } from '../lib/date';
 import { EmptyState } from '../components/EmptyState';
+import { RetentionMap } from './RetentionMap';
 import './retention.css';
 
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const shortDateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
 const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
 
 type ColumnKey = 'client' | 'serial' | 'city' | 'last' | 'machines' | 'os';
@@ -47,16 +49,21 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
   </div>;
 }
 
-export function RetentionView({ clients, loading, futureClients, serialsByClient, onFollowup, onOpen }: {
+export function RetentionView({ clients, loading, futureClients, serialsByClient, appointments, technicians, weekStart, onFollowup, onOpen, onSchedule }: {
   clients: ClientSummary[];
   loading: boolean;
   futureClients: Set<string>;
   serialsByClient: Record<string, string[]>;
+  appointments: Appointment[];
+  technicians: Technician[];
+  weekStart: Date;
   onFollowup: (client: ClientSummary) => void;
   onOpen: (client: ClientSummary) => void;
+  onSchedule: (client: ClientSummary, serial: string, technicianId: string) => void;
 }) {
   const [months, setMonths] = useState(6);
   const [search, setSearch] = useState('');
+  const [mode, setMode] = useState<'list' | 'map'>('list');
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
   const [sortKey, setSortKey] = useState<ColumnKey>('last');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -79,13 +86,15 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const filtered = useMemo(() => {
     const now = new Date();
     const cutoff = new Date(now);
-    cutoff.setMonth(cutoff.getMonth() - months);
-    cutoff.setHours(0, 0, 0, 0);
+    if (months > 0) {
+      cutoff.setMonth(cutoff.getMonth() - months);
+      cutoff.setHours(0, 0, 0, 0);
+    }
 
     const rows = clients.filter((client) => {
-      if (!client.last_service_at) return false;
+      if (!client.last_service_at) return months === 0;
       const lastDate = new Date(client.last_service_at);
-      if (lastDate < cutoff || lastDate > now) return false;
+      if (months > 0 && (lastDate < cutoff || lastDate > now)) return false;
 
       const clientSerials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
       const serialText = clientSerials.join(' ');
@@ -94,7 +103,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       const hasFuture = futureClients.has(retentionKey(client.client_name, client.branch));
       if (!matchSearch || hasFuture) return false;
 
-      const formattedDate = dateFmt.format(lastDate);
+      const formattedDate = lastDate ? dateFmt.format(lastDate) : '';
       return (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
         (!filters.serial || serialText.toLowerCase().includes(filters.serial.toLowerCase())) &&
         (!filters.city || (client.city || '').toLowerCase().includes(filters.city.toLowerCase())) &&
@@ -119,12 +128,23 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     return rows;
   }, [clients, months, search, futureClients, serialsByClient, filters, sortKey, sortDirection]);
 
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 5);
+  const weekLabel = `Agenda ${shortDateFmt.format(weekStart)}–${shortDateFmt.format(weekEnd)}`;
+
   return <section className="list-page">
     <div className="list-toolbar">
       <div className="search-box"><Search size={18}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente, série ou cidade" /></div>
-      <label className="inline-filter"><span>Último atendimento em</span><select value={months} onChange={(e) => setMonths(Number(e.target.value))}><option value={6}>últimos 6 meses</option><option value={9}>últimos 9 meses</option><option value={12}>últimos 12 meses</option><option value={18}>últimos 18 meses</option></select></label>
+      <div className="retention-toolbar-right">
+        <div className="retention-view-switch" aria-label="Alternar visualização">
+          <button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}><List size={14}/> Lista</button>
+          <button type="button" className={mode === 'map' ? 'active' : ''} onClick={() => setMode('map')}><Map size={14}/> Mapa</button>
+        </div>
+        <label className="inline-filter"><span>Último atendimento em</span><select value={months} onChange={(e) => setMonths(Number(e.target.value))}><option value={0}>sem filtro de data</option><option value={3}>últimos 3 meses</option><option value={6}>últimos 6 meses</option><option value={9}>últimos 9 meses</option><option value={12}>últimos 12 meses</option><option value={18}>últimos 18 meses</option></select></label>
+      </div>
     </div>
-    <div className="table-shell retention-table">
+
+    {mode === 'map' ? <RetentionMap clients={filtered} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} onOpen={onOpen} onFollowup={onFollowup} onSchedule={onSchedule} /> : <div className="table-shell retention-table">
       <div className="table-head retention-columns retention-head">
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
@@ -134,7 +154,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         <ColumnHeader column="os" label="OS" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.os} setFilter={(value) => updateFilter('os', value)} numeric/>
         <span></span>
       </div>
-      {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text="O período considera somente o intervalo selecionado. Ajuste os filtros se quiser ampliar a análise." /> : filtered.map((client) => {
+      {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text={months === 0 ? 'Nenhum cliente corresponde aos filtros aplicados.' : 'O período considera somente o intervalo selecionado. Ajuste os filtros ou remova o filtro de data.'} /> : filtered.map((client) => {
         const days = client.last_service_at ? daysBetween(client.last_service_at.slice(0, 10)) : 0;
         const serials = serialsFor(client);
         const serialText = serials.length ? serials.join(', ') : '—';
@@ -148,6 +168,6 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
           <button className="row-action" onClick={(event) => { event.stopPropagation(); onFollowup(client); }}>Criar follow-up</button>
         </div>;
       })}
-    </div>
+    </div>}
   </section>;
 }
