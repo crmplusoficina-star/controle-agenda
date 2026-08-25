@@ -67,7 +67,6 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   onOpen: (client: ClientSummary) => void;
   onSchedule: (client: ClientSummary, serial: string, technicianId: string) => void;
 }) {
-  const [months, setMonths] = useState(0);
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'list' | 'map'>('list');
   const [recencyFilter, setRecencyFilter] = useState<RecencyBucket | null>(null);
@@ -79,17 +78,12 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   function serialsFor(client: ClientSummary) { return serialsByClient[retentionKey(client.client_name, client.branch)] || []; }
   function updateFilter(column: ColumnKey, value: string) { setFilters((current) => ({ ...current, [column]: value })); }
   function updateSort(column: ColumnKey, direction: SortDirection) { setSortKey(column); setSortDirection(direction); setActiveColumn(null); }
-  function applyRecencyFilter(bucket: RecencyBucket | null) { setRecencyFilter(bucket); if (bucket) setMonths(0); }
-  function applyPeriodFilter(value: number) { setMonths(value); setRecencyFilter(null); }
+  function applyRecencyFilter(bucket: RecencyBucket | null) { setRecencyFilter(bucket); }
 
   const filtered = useMemo(() => {
-    const now = new Date();
-    const cutoff = new Date(now);
-    if (months > 0) { cutoff.setMonth(cutoff.getMonth() - months); cutoff.setHours(0, 0, 0, 0); }
     const rows = clients.filter((client) => {
-      if (!client.last_service_at) return months === 0 && (!recencyFilter || recencyFilter === '18+');
+      if (!client.last_service_at) return !recencyFilter || recencyFilter === '18+';
       const lastDate = new Date(client.last_service_at);
-      if (months > 0 && (lastDate < cutoff || lastDate > now)) return false;
       if (recencyFilter && recencyBucket(client.last_service_at) !== recencyFilter) return false;
       const clientSerials = serialsFor(client);
       const serialText = clientSerials.join(' ');
@@ -117,7 +111,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       return String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
     });
     return rows;
-  }, [clients, months, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection]);
+  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection]);
 
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 5);
   const weekLabel = `Agenda ${shortDateFmt.format(weekStart)}–${shortDateFmt.format(weekEnd)}`;
@@ -130,7 +124,6 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
           <button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}><List size={14}/> Lista</button>
           <button type="button" className={mode === 'map' ? 'active' : ''} onClick={() => setMode('map')}><Map size={14}/> Mapa</button>
         </div>
-        <label className="inline-filter"><span>Último atendimento em</span><select value={months} onChange={(e) => applyPeriodFilter(Number(e.target.value))}><option value={0}>sem filtro de data</option><option value={3}>últimos 3 meses</option><option value={6}>últimos 6 meses</option><option value={9}>últimos 9 meses</option><option value={12}>últimos 12 meses</option><option value={18}>últimos 18 meses</option></select></label>
       </div>
     </div>
 
@@ -146,7 +139,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         <ColumnHeader column="os" label="OS" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.os} setFilter={(value) => updateFilter('os', value)} numeric/>
         <span></span>
       </div>
-      {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text={months === 0 ? 'Nenhum cliente corresponde aos filtros aplicados.' : 'O período considera somente o intervalo selecionado. Ajuste os filtros ou remova o filtro de data.'} /> : filtered.map((client) => {
+      {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text="Nenhum cliente corresponde aos filtros aplicados." /> : filtered.map((client) => {
         const days = client.last_service_at ? daysBetween(client.last_service_at.slice(0, 10)) : 0;
         const serials = serialsFor(client);
         const serialText = serials.length ? serials.join(', ') : '—';
