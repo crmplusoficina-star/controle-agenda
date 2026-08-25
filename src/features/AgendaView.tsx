@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import type { Appointment, Technician } from '../types';
 import { addDays, isoDate } from '../lib/date';
@@ -27,30 +27,47 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
   const title = `${dayDate.format(weekStart)} — ${dayDate.format(weekEnd)}`;
   const forecast = appointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
   const shellRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef({ active: false, startX: 0, scrollLeft: 0 });
+  const dragRef = useRef({ active: false, startX: 0, scrollLeft: 0, moved: false });
+  const suppressClickRef = useRef(false);
   const [dragging, setDragging] = useState(false);
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-    if (target.closest('button, input, select, textarea, a')) return;
+    if (target.closest('input, select, textarea, a')) return;
     const shell = shellRef.current;
     if (!shell || shell.scrollWidth <= shell.clientWidth) return;
-    dragRef.current = { active: true, startX: event.clientX, scrollLeft: shell.scrollLeft };
-    setDragging(true);
+    dragRef.current = { active: true, startX: event.clientX, scrollLeft: shell.scrollLeft, moved: false };
     shell.setPointerCapture(event.pointerId);
   }
 
   function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const shell = shellRef.current;
     if (!shell || !dragRef.current.active) return;
-    shell.scrollLeft = dragRef.current.scrollLeft - (event.clientX - dragRef.current.startX);
+    const delta = event.clientX - dragRef.current.startX;
+    if (!dragRef.current.moved && Math.abs(delta) < 5) return;
+    dragRef.current.moved = true;
+    setDragging(true);
+    shell.scrollLeft = dragRef.current.scrollLeft - delta;
+    event.preventDefault();
   }
 
   function stopDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const shell = shellRef.current;
+    const moved = dragRef.current.moved;
     dragRef.current.active = false;
+    dragRef.current.moved = false;
     setDragging(false);
+    if (moved) {
+      suppressClickRef.current = true;
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+    }
     if (shell?.hasPointerCapture(event.pointerId)) shell.releasePointerCapture(event.pointerId);
+  }
+
+  function blockClickAfterDrag(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!suppressClickRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   return <div className="agenda-view">
@@ -70,7 +87,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
       onPointerMove={moveDrag}
       onPointerUp={stopDrag}
       onPointerCancel={stopDrag}
-      title="Arraste para os lados para navegar pela agenda"
+      onClickCapture={blockClickAfterDrag}
     >
       <div className="agenda-grid agenda-head">
         <div className="tech-col">Técnico</div>
