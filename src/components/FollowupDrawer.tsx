@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import type { Branch, FollowupLostReason } from '../types';
 import type { FollowupDraft } from '../drafts';
@@ -33,9 +34,11 @@ export function FollowupDrawer({ draft, setDraft, branches, error, onClose, onSu
 }) {
   const [lostReason, setLostReason] = useState<Exclude<FollowupLostReason, null> | ''>('');
   const [localError, setLocalError] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setLocalError('');
+    setDeleting(false);
   }, [draft?.id]);
 
   useEffect(() => {
@@ -111,6 +114,24 @@ export function FollowupDrawer({ draft, setDraft, branches, error, onClose, onSu
     }
   }
 
+  async function deleteFollowup() {
+    if (!draft.id || deleting) return;
+    const confirmed = window.confirm(`Excluir a tratativa de ${draft.client_name}?\n\nEssa ação também remove o histórico desta tratativa.`);
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setLocalError('');
+    const { error: deleteError } = await supabase.from('followups').delete().eq('id', draft.id);
+    if (deleteError) {
+      setLocalError(deleteError.message);
+      setDeleting(false);
+      return;
+    }
+
+    onClose();
+    window.location.reload();
+  }
+
   return <Drawer
     open
     title={draft.id ? 'Tratativa' : 'Nova tratativa'}
@@ -157,7 +178,7 @@ export function FollowupDrawer({ draft, setDraft, branches, error, onClose, onSu
 
       {(localError || error) && <div className="form-error">{localError || error}</div>}
       <div className="drawer-actions followup-drawer-actions">
-        <span />
+        {draft.id ? <button type="button" className="danger-button" disabled={deleting} onClick={() => void deleteFollowup()}><Trash2 size={15}/>{deleting ? 'Excluindo...' : 'Excluir'}</button> : <span />}
         <button type="button" className="subtle-button" onClick={onClose}>Cancelar</button>
         <button className="primary-button">Salvar</button>
       </div>
