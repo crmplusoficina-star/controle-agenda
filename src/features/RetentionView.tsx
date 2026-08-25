@@ -280,6 +280,24 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     return rows;
   }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection, treatments, citySummaries, cityNeedle]);
 
+  const mapClients = useMemo(() => {
+    if (!cityNeedle) return filtered;
+    return filtered.map((client) => ({
+      ...client,
+      client_key: `${client.client_key}::CITY::${foldText(client.city)}`,
+    }));
+  }, [filtered, cityNeedle]);
+
+  const mapOriginalByKey = useMemo(() => {
+    const result = new Map<string, ClientSummary>();
+    mapClients.forEach((mapClient, index) => result.set(mapClient.client_key, filtered[index]));
+    return result;
+  }, [mapClients, filtered]);
+
+  function originalMapClient(client: ClientSummary) {
+    return mapOriginalByKey.get(client.client_key) || client;
+  }
+
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 5);
   const weekLabel = `Agenda ${shortDateFmt.format(weekStart)}–${shortDateFmt.format(weekEnd)}`;
 
@@ -296,7 +314,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
 
     {mode === 'list' && <RecencyLegend active={recencyFilter} onChange={applyRecencyFilter}/>} 
 
-    {mode === 'map' ? <RetentionMap clients={filtered} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={applyRecencyFilter} onOpen={onOpen} onFollowup={onFollowup} onSchedule={onSchedule} /> : <div className="table-shell retention-table">
+    {mode === 'map' ? <RetentionMap clients={mapClients} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={applyRecencyFilter} onOpen={(client) => onOpen(originalMapClient(client))} onFollowup={(client) => onFollowup(originalMapClient(client))} onSchedule={(client, serial, technicianId) => onSchedule(originalMapClient(client), serial, technicianId)} /> : <div className="table-shell retention-table">
       <div className="table-head retention-columns retention-head">
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
