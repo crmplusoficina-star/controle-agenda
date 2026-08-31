@@ -68,6 +68,7 @@ type MapResponse = {
 };
 
 type RoadStats = { distance_km: number; duration_min: number };
+type RoadRoute = { technicianId: string; geometry: [number, number][]; stats?: RoadStats };
 
 function localIso(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -195,9 +196,8 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   const [data, setData] = useState<MapResponse>({ points: [], route: null, unresolved: 0, geocoded_now: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [roadRoute, setRoadRoute] = useState<[number, number][]>([]);
-  const [roadStats, setRoadStats] = useState<RoadStats | null>(null);
-  const [roadError, setRoadError] = useState(false);
+  const [roadRoutes, setRoadRoutes] = useState<RoadRoute[]>([]);
+  const [roadErrorIds, setRoadErrorIds] = useState<string[]>([]);
 
   useEffect(() => {
     const available = new Set(scheduledTechnicians.map((technician) => technician.id));
@@ -224,8 +224,18 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     }
     return map;
   }, [clients, serialsByClient]);
+
   const selectedAgenda = useMemo(() => appointments.filter((item) => !routeTechnicianId || item.technician_id === routeTechnicianId).slice().sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, routeTechnicianId]);
-  const sequenceByAppointment = useMemo(() => new Map(selectedAgenda.map((item, index) => [item.id, index + 1])), [selectedAgenda]);
+  const sequenceByAppointment = useMemo(() => {
+    const map = new Map<string, number>();
+    const counters = new Map<string, number>();
+    for (const item of selectedAgenda) {
+      const next = (counters.get(item.technician_id) || 0) + 1;
+      counters.set(item.technician_id, next);
+      map.set(item.id, next);
+    }
+    return map;
+  }, [selectedAgenda]);
 
   const loadMap = useCallback(async () => {
     setLoading(true);
@@ -347,35 +357,81 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     }];
   }), [cityCenters, clientByKey, clientKeysBySerial, clientPoints, serverAppointmentById, technicians, visibleAgenda]);
 
-  const routeAppointmentPoints = useMemo(() => routeTechnicianId ? appointmentPoints.filter((point) => point.technician_id === routeTechnicianId) : [], [appointmentPoints, routeTechnicianId]);
+  const displayedAppointmentPositions = useMemo(() => {
+    const map = new Map<string, [number, number]>();
+    appointmentPoints.forEach((point, index) => map.set(point.id, agendaVisiblePosition(appointmentPoints, index)));
+    return map;
+  }, [appointmentPoints]);
+
+  const routeGroups = useMemo(() => {
+    const groups = new Map<string, MapPoint[]>();
+    for (const point of appointmentPoints) {
+      if (!point.technician_id) continue;
+      const current = groups.get(point.technician_id) || [];
+      current.push(point);
+      groups.set(point.technician_id, current);
+    }
+    return Array.from(groups.entries()).map(([technicianId, points]) => ({ technicianId, points }));
+  }, [appointmentPoints]);
+
+  const routeAppointmentPoints = useMemo(() => routeTechnicianId ? (routeGroups.find((group) => group.technicianId === routeTechnicianId)?.points || []) : [], [routeGroups, routeTechnicianId]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setRoadRoute([]);
-    setRoadStats(null);
-    setRoadError(false);
-    if (!routeTechnicianId || routeAppointmentPoints.length < 2) return () => controller.abort();
+    setRoadRoutes([]);
+    setRoadErrorIds([]);
 
-    const rawStops: [number, number][] = routeAppointmentPoints.map((point) => [point.lat, point.lng] as [number, number]);
-    const stops = rawStops.filter((point, index) => index === 0 || haversineKm(rawStops[index - 1], point) > 0.03);
-    if (stops.length < 2) return () => controller.abort();
+    const candidates = routeGroups.filter((group) => group.points.length >= 2 && (!technicianIds.length || technicianIds.includes(group.technicianId)));
+    if (!candidates.length) return () => controller.abort();
 
-    const coords = stops.map(([lat, lng]) => `${lng},${lat}`).join(';');
-    void fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`, { signal: controller.signal })
-      .then(async (response) => {
+    const serverFallback = data.route && !data.route.approximate && !data.route.routing_error && data.route.geometry?.length >= 2
+      ? data.route
+      : null;
+
+    void Promise.all(candidates.map(async (group) => {
+      const rawStops = group.points.map((point) => displayedAppointmentPositions.get(point.id) || [point.lat, point.lng] as [number, number]);
+      const stops = rawStops.filter((point, index) => index === 0 || haversineKm(rawStops[index - 1], point) > 0.005);
+      if (stops.length < 2) return null;
+
+      const coords = stops.map(([lat, lng]) => `${lng},${lat}`).join(';');
+      try {
+        const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`, { signal: controller.signal });
         if (!response.ok) throw new Error('routing_failed');
         const json = await response.json();
         const best = json?.routes?.[0];
         const geometry = best?.geometry?.coordinates;
         if (!Array.isArray(geometry) || geometry.length < 2) throw new Error('routing_failed');
-        setRoadRoute(geometry.map((item: number[]) => [Number(item[1]), Number(item[0])] as [number, number]));
-        setRoadStats({ distance_km: Math.round((Number(best.distance || 0) / 1000) * 10) / 10, duration_min: Math.round(Number(best.duration || 0) / 60) });
-      })
-      .catch((routeError) => { if (routeError?.name !== 'AbortError') setRoadError(true); });
+        return {
+          technicianId: group.technicianId,
+          geometry: geometry.map((item: number[]) => [Number(item[1]), Number(item[0])] as [number, number]),
+          stats: { distance_km: Math.round((Number(best.distance || 0) / 1000) * 10) / 10, duration_min: Math.round(Number(best.duration || 0) / 60) },
+        } satisfies RoadRoute;
+      } catch (routeError: any) {
+        if (routeError?.name === 'AbortError') return null;
+        if (serverFallback && serverFallback.technician_id === group.technicianId) {
+          return {
+            technicianId: group.technicianId,
+            geometry: serverFallback.geometry,
+            stats: serverFallback.distance_km != null && serverFallback.duration_min != null
+              ? { distance_km: serverFallback.distance_km, duration_min: serverFallback.duration_min }
+              : undefined,
+          } satisfies RoadRoute;
+        }
+        setRoadErrorIds((current) => current.includes(group.technicianId) ? current : [...current, group.technicianId]);
+        return null;
+      }
+    })).then((routes) => {
+      if (controller.signal.aborted) return;
+      setRoadRoutes(routes.filter((route): route is RoadRoute => Boolean(route)));
+    });
 
     return () => controller.abort();
-  }, [routeAppointmentPoints, routeTechnicianId]);
+  }, [data.route, displayedAppointmentPositions, routeGroups, technicianIds]);
 
+  const selectedRoadRoute = routeTechnicianId ? roadRoutes.find((route) => route.technicianId === routeTechnicianId) : undefined;
+  const fitRoute = routeTechnicianId
+    ? selectedRoadRoute?.geometry || []
+    : roadRoutes.flatMap((route) => route.geometry);
   const fitPoints = useMemo(() => routeTechnicianId ? routeAppointmentPoints : [...data.points.filter((point) => point.kind !== 'appointment' && (point.kind !== 'client' || isBrazilPoint(point.lat, point.lng))), ...appointmentPoints], [appointmentPoints, data.points, routeAppointmentPoints, routeTechnicianId]);
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
@@ -396,13 +452,13 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     {error && <div className="map-message error">{error}</div>}
     {!error && data.points.length === 0 && loading && <div className="map-message"><Loader2 className="spin" size={18}/> Preparando mapa completo...</div>}
-    {routeTechnicianId && roadError && routeAppointmentPoints.length >= 2 && <div className="map-message error">Os atendimentos estão localizados, mas a malha rodoviária não respondeu agora. A linha reta não será usada como substituta.</div>}
+    {routeTechnicianId && roadErrorIds.includes(routeTechnicianId) && routeAppointmentPoints.length >= 2 && <div className="map-message error">Os atendimentos estão localizados, mas a malha rodoviária não respondeu agora.</div>}
 
     <div className="retention-map">
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <FitMap points={fitPoints} route={roadRoute} />
-        {roadRoute.length >= 2 ? <Polyline positions={roadRoute} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.9, dashArray: '10 8' }} /> : null}
+        <FitMap points={fitPoints} route={fitRoute} />
+        {roadRoutes.map((route) => <Polyline key={`road:${route.technicianId}`} positions={route.geometry} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 5 : 4, opacity: routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }} />)}
 
         {clientPoints.map((point) => {
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
@@ -428,7 +484,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const travel = isTravelAppointment(point);
           const dayLabel = point.appointment_date ? relativeDayLabel(point.appointment_date) : 'AGENDA';
           const tooltip = `${travel ? 'Deslocamento' : `Agenda ${sequence}`} · ${point.technician_name || 'Técnico'}${point.service_city ? ` · ${point.service_city}` : ''}`;
-          return <Marker key={point.id} position={agendaVisiblePosition(appointmentPoints, index)} icon={agendaIcon(sequence, travel)} zIndexOffset={selected ? 1200 : 800}>
+          return <Marker key={point.id} position={displayedAppointmentPositions.get(point.id) || [point.lat, point.lng]} icon={agendaIcon(sequence, travel)} zIndexOffset={selected ? 1200 : 800}>
             <Tooltip permanent={selected} direction="top" offset={[0, -21]} className="technician-tooltip">{selected ? `${sequence}. ${dayLabel} · ${point.service_city || point.city || 'Destino'}` : tooltip}</Tooltip>
             <Popup minWidth={260}><div className="map-popup-card technician-card">
               <strong>{travel ? `🚗 Deslocamento ${sequence}` : `🧑‍🔧 Agenda ${sequence}`} · {point.technician_name || 'Técnico agendado'}</strong>
@@ -446,10 +502,10 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     <div className="map-footer">
       <div><MapPinned size={15}/><span>{locatedClients.toLocaleString('pt-BR')} de {requestedClients.toLocaleString('pt-BR')} clientes no mapa</span></div>
-      {routeTechnicianId && <div><Route size={15}/><span>{routeLabel}: {routeAppointmentPoints.length} agenda{routeAppointmentPoints.length === 1 ? '' : 's'} na semana{roadStats ? ` · ${roadStats.distance_km} km · ${durationLabel(roadStats.duration_min)}` : routeAppointmentPoints.length >= 2 ? ' · calculando rota rodoviária entre atendimentos' : ' · aguardando próximo atendimento'}</span></div>}
-      {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione um técnico para exibir sua rota rodoviária</span></div>}
+      {routeTechnicianId && <div><Route size={15}/><span>{routeLabel}: {routeAppointmentPoints.length} agenda{routeAppointmentPoints.length === 1 ? '' : 's'} na semana{selectedRoadRoute?.stats ? ` · ${selectedRoadRoute.stats.distance_km} km · ${durationLabel(selectedRoadRoute.stats.duration_min)}` : routeAppointmentPoints.length >= 2 ? ' · calculando rota rodoviária entre atendimentos' : ' · aguardando próximo atendimento'}</span></div>}
+      {!routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. A rota começa no primeiro atendimento e segue até os próximos clientes pela malha rodoviária; a filial permanece apenas como referência visual.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. Cada rota começa no primeiro atendimento do técnico e segue aos próximos clientes pela malha rodoviária; a filial permanece apenas como referência visual.</div>
   </div>;
 }
