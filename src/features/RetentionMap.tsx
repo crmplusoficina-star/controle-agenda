@@ -86,6 +86,10 @@ function fold(value?: string | null) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 }
 
+function serialKey(value?: string | null) {
+  return fold(value).replace(/[^a-z0-9]/g, '');
+}
+
 function isTravelAppointment(point: Pick<MapPoint, 'service_reason' | 'description' | 'client_name'>) {
   const text = fold(`${point.service_reason || ''} ${point.description || ''} ${point.client_name || ''}`);
   return text.includes('deslocamento') || text.includes('desloc') || text.includes('viagem');
@@ -202,6 +206,20 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
   const routeTechnicianId = technicianIds.length === 1 ? technicianIds[0] : '';
   const clientByKey = useMemo(() => new Map(clients.map((client) => [client.client_key, client])), [clients]);
+  const clientKeysBySerial = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const client of clients) {
+      const serials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
+      for (const serial of serials) {
+        const key = serialKey(serial);
+        if (!key) continue;
+        const current = map.get(key) || [];
+        if (!current.includes(client.client_key)) current.push(client.client_key);
+        map.set(key, current);
+      }
+    }
+    return map;
+  }, [clients, serialsByClient]);
   const selectedAgenda = useMemo(() => appointments.filter((item) => !routeTechnicianId || item.technician_id === routeTechnicianId).slice().sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, routeTechnicianId]);
   const sequenceByAppointment = useMemo(() => new Map(selectedAgenda.map((item, index) => [item.id, index + 1])), [selectedAgenda]);
 
@@ -263,7 +281,14 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     const city = String(appointment.service_city || '').trim();
     const cityKey = fold(city);
     const technicianName = technicians.find((item) => item.id === appointment.technician_id)?.name || null;
-    const matchingClientPoint = clientPoints.find((point) => {
+    const serialMatches = clientKeysBySerial.get(serialKey(appointment.equipment_serial)) || [];
+    const serialClientPoint = clientPoints.find((point) => {
+      if (!point.client_key || !serialMatches.includes(point.client_key)) return false;
+      const client = clientByKey.get(point.client_key);
+      if (!client) return false;
+      return fold(client.branch) === fold(appointment.branch) && (!cityKey || fold(client.city) === cityKey);
+    });
+    const nameClientPoint = clientPoints.find((point) => {
       if (!point.client_key) return false;
       const client = clientByKey.get(point.client_key);
       if (!client) return false;
@@ -271,6 +296,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
         && fold(client.branch) === fold(appointment.branch)
         && (!cityKey || fold(client.city) === cityKey);
     });
+    const matchingClientPoint = serialClientPoint || nameClientPoint;
     const branchCity = cityCenters.byBranchCity.get(`${fold(appointment.branch)}|${cityKey}`);
     const uniqueCity = cityCenters.byUniqueCity.get(cityKey);
     const trustedCenter: [number, number] | undefined = matchingClientPoint
@@ -287,16 +313,19 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     let locationSource = '';
     let locationLabel: string | null = null;
 
-    if (serverValid && serverPoint) {
+    if (matchingClientPoint) {
+      position = [matchingClientPoint.lat, matchingClientPoint.lng];
+      precision = matchingClientPoint.precision || 'city';
+      locationSource = serialClientPoint ? 'trusted-client-serial-position' : 'trusted-client-name-position';
+      locationLabel = matchingClientPoint.location_label || null;
+    } else if (serverValid && serverPoint) {
       position = [serverPoint.lat, serverPoint.lng];
       precision = serverPoint.precision || 'city';
       locationSource = serverPoint.location_source || 'server';
       locationLabel = serverPoint.location_label || null;
     } else if (trustedCenter) {
       position = trustedCenter;
-      precision = matchingClientPoint?.precision || 'city';
-      locationSource = matchingClientPoint ? 'trusted-client-position' : branchCity ? 'trusted-branch-city-center' : 'trusted-city-center';
-      locationLabel = matchingClientPoint?.location_label || null;
+      locationSource = branchCity ? 'trusted-branch-city-center' : 'trusted-city-center';
     } else {
       const base = TECHNICAL_BASES.find((item) => fold(item.branch) === fold(appointment.branch) && fold(item.branch) === cityKey);
       if (base) {
@@ -313,7 +342,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       service_city: appointment.service_city, service_reason: appointment.service_reason, description: appointment.description,
       location_source: locationSource, location_label: locationLabel,
     }];
-  }), [cityCenters, clientByKey, clientPoints, serverAppointmentById, technicians, visibleAgenda]);
+  }), [cityCenters, clientByKey, clientKeysBySerial, clientPoints, serverAppointmentById, technicians, visibleAgenda]);
 
   const routeAppointmentPoints = useMemo(() => routeTechnicianId ? appointmentPoints.filter((point) => point.technician_id === routeTechnicianId) : [], [appointmentPoints, routeTechnicianId]);
 
