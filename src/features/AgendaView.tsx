@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import type { Appointment, Technician } from '../types';
 import { addDays, isoDate } from '../lib/date';
 import { supabase } from '../lib/supabase';
+import { APPOINTMENT_TYPE_LEGEND, appointmentTypeStyle } from './appointmentTypes';
+import './agenda-colors.css';
 
 const dayName = new Intl.DateTimeFormat('pt-BR', { weekday: 'short' });
 const dayDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
@@ -84,6 +86,11 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
         <button className="primary-button" onClick={onAddTechnician}><Plus size={17} /> Técnico</button>
       </div>
     </div>
+
+    <div className="agenda-type-legend" aria-label="Legenda dos tipos de atendimento">
+      {APPOINTMENT_TYPE_LEGEND.map((item) => <span className="agenda-type-legend-item" key={item.label}><i className="agenda-type-swatch" style={{ background: item.color }} />{item.label}</span>)}
+    </div>
+
     <div className="agenda-shell agenda-week-fit">
       <div className="agenda-grid agenda-head">
         <div className="tech-col">Técnico</div>
@@ -105,11 +112,14 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
               onDragLeave={() => dropTarget === cellKey && setDropTarget(null)}
               onDrop={(event) => { event.preventDefault(); if (dragged && canDrop) void copyAppointment(dragged, date, tech.id); }}
             >
-              {items.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => (
-                <button
+              {items.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
+                const typeStyle = appointmentTypeStyle(item.service_reason);
+                const hasForecast = Number(item.forecast_amount || 0) > 0;
+                return <button
                   key={item.id}
                   draggable
                   className={`appointment-card ${statusClass[item.status] || ''} ${draggedId === item.id ? 'copy-dragging' : ''}`}
+                  style={{ background: typeStyle.background, borderLeftColor: typeStyle.color }}
                   onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('text/plain', item.id); }}
                   onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
                   onClick={(e) => { e.stopPropagation(); if (!draggedId) onEdit(item); }}
@@ -117,9 +127,10 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
                 >
                   <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
                   <span>{item.service_city || 'Cidade não informada'}</span>
-                  <small>{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
-                </button>
-              ))}
+                  <small className="appointment-card-reason">{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
+                  {hasForecast && <small className="appointment-card-revenue">Faturamento: <b>{money.format(Number(item.forecast_amount))}</b></small>}
+                </button>;
+              })}
               {copying && dropTarget === cellKey && <span className="copying-label">Copiando...</span>}
             </div>;
           })}
