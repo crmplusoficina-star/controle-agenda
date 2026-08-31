@@ -31,6 +31,7 @@ type SortDirection = 'asc' | 'desc';
 
 const columnKeys: ColumnKey[] = ['client', 'serial', 'city', 'branch', 'last', 'machines', 'os', 'treatment'];
 const emptyFilters = (): Record<ColumnKey, string> => ({ client: '', serial: '', city: '', branch: '', last: '', machines: '', os: '', treatment: '' });
+const emptySelectedFilters = (): Record<ColumnKey, string[]> => ({ client: [], serial: [], city: [], branch: [], last: [], machines: [], os: [], treatment: [] });
 function storedSort(): { key: ColumnKey; direction: SortDirection } {
   try {
     const saved = JSON.parse(window.localStorage.getItem(RETENTION_SORT_STORAGE_KEY) || '{}') as { key?: string; direction?: string };
@@ -68,6 +69,9 @@ type ColumnHeaderProps = {
   setSort: (key: ColumnKey, direction: SortDirection) => void;
   filter: string;
   setFilter: (value: string) => void;
+  options: string[];
+  selected: string[];
+  setSelected: (values: string[]) => void;
   numeric?: boolean;
 };
 
@@ -79,10 +83,12 @@ function foldText(value: string | null | undefined) {
     .toLowerCase();
 }
 
-function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, sortDirection, setSort, filter, setFilter, numeric }: ColumnHeaderProps) {
+function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, sortDirection, setSort, filter, setFilter, options, selected, setSelected, numeric }: ColumnHeaderProps) {
   const active = activeColumn === column;
   const sorted = sortKey === column;
   const rootRef = useRef<HTMLDivElement>(null);
+  const hasFilter = Boolean(filter || selected.length);
+  const visibleOptions = options.filter((option) => !filter || foldText(option).includes(foldText(filter))).slice(0, 120);
 
   useEffect(() => {
     if (!active) return;
@@ -94,9 +100,10 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
   }, [active, setActiveColumn]);
 
   return <div className="retention-head-cell" ref={rootRef}>
-    <button className={`column-head-button ${filter ? 'has-filter' : ''}`} type="button" onClick={() => setActiveColumn(active ? null : column)}>
+    <button className={`column-head-button ${hasFilter ? 'has-filter' : ''}`} type="button" onClick={() => setActiveColumn(active ? null : column)}>
       <span>{label}</span>
       {sorted ? (sortDirection === 'asc' ? <ArrowUp size={13}/> : <ArrowDown size={13}/>) : <Filter size={13}/>} 
+      {selected.length > 0 && <b className="column-filter-count">{selected.length}</b>}
     </button>
     {active && <div className={`column-menu ${column === 'machines' || column === 'os' || column === 'treatment' ? 'align-right' : ''}`}>
       <div className="column-menu-title">{label}</div>
@@ -104,10 +111,19 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
         <button type="button" onClick={() => setSort(column, 'asc')}><ArrowUp size={14}/> {numeric ? 'Menor primeiro' : 'A → Z'}</button>
         <button type="button" onClick={() => setSort(column, 'desc')}><ArrowDown size={14}/> {numeric ? 'Maior primeiro' : 'Z → A'}</button>
       </div>
-      <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') setActiveColumn(null); }} placeholder={column === 'treatment' ? 'Ex.: Em tratativa' : numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 7 }}>
-        <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setFilter('')}><X size={13}/> Limpar filtro</button>
-        <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setActiveColumn(null)}><Check size={13}/> Confirmar</button>
+      <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={column === 'treatment' ? 'Ex.: Em tratativa' : numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
+      <div className="column-option-caption">Selecionar um ou mais</div>
+      <div className="column-option-list">
+        {visibleOptions.length ? visibleOptions.map((option) => {
+          const checked = selected.includes(option);
+          return <button type="button" className={checked ? 'selected' : ''} key={option} onClick={() => setSelected(checked ? selected.filter((item) => item !== option) : [...selected, option])}>
+            <span className="column-option-check">{checked && <Check size={12}/>}</span><span>{option}</span>
+          </button>;
+        }) : <div className="column-option-empty">Nenhuma opção encontrada</div>}
+      </div>
+      <div className="column-filter-actions">
+        <button className="clear-column-filter" type="button" onClick={() => { setFilter(''); setSelected([]); }}><X size={13}/> Limpar filtro</button>
+        <button className="clear-column-filter" type="button" onClick={() => setActiveColumn(null)}><Check size={13}/> Confirmar</button>
       </div>
     </div>}
   </div>;
@@ -158,6 +174,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const [sortKey, setSortKey] = useState<ColumnKey>(initialSort.key);
   const [sortDirection, setSortDirection] = useState<SortDirection>(initialSort.direction);
   const [filters, setFilters] = useState<Record<ColumnKey, string>>(emptyFilters);
+  const [selectedFilters, setSelectedFilters] = useState<Record<ColumnKey, string[]>>(emptySelectedFilters);
   const [treatments, setTreatments] = useState<Record<string, Followup>>({});
   const [citySummaries, setCitySummaries] = useState<Record<string, ClientCitySummary[]>>({});
 
@@ -240,10 +257,17 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   }, [clientBranchesKey]);
 
   const cityNeedle = foldText(filters.city);
+  const selectedCities = selectedFilters.city;
 
   function cityContextFor(client: ClientSummary) {
+    const contexts = citySummaries[client.client_key] || [];
+    if (selectedCities.length) {
+      const selectedContext = contexts.find((row) => selectedCities.includes(row.city));
+      if (selectedContext && (!cityNeedle || foldText(selectedContext.city).includes(cityNeedle))) return selectedContext;
+      if (selectedCities.includes(client.city || '') && (!cityNeedle || foldText(client.city).includes(cityNeedle))) return null;
+    }
     if (!cityNeedle) return null;
-    return (citySummaries[client.client_key] || []).find((row) => foldText(row.city).includes(cityNeedle)) || null;
+    return contexts.find((row) => foldText(row.city).includes(cityNeedle)) || null;
   }
 
   function effectiveClientFor(client: ClientSummary): ClientSummary {
@@ -277,21 +301,62 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     return `${state.label} ${state.detail}`.trim();
   }
   function updateFilter(column: ColumnKey, value: string) { setFilters((current) => ({ ...current, [column]: value })); }
+  function updateSelectedFilter(column: ColumnKey, values: string[]) { setSelectedFilters((current) => ({ ...current, [column]: values })); }
   function updateSort(column: ColumnKey, direction: SortDirection) { setSortKey(column); setSortDirection(direction); setActiveColumn(null); }
   function applyRecencyFilter(bucket: RecencyBucket | null) { setRecencyFilter(bucket); }
   function clearAllFilters() {
     setSearch('');
     setRecencyFilter(null);
     setFilters(emptyFilters());
+    setSelectedFilters(emptySelectedFilters());
     setActiveColumn(null);
   }
 
-  const hasActiveFilters = Boolean(search.trim() || recencyFilter || columnKeys.some((key) => filters[key].trim()));
+  function columnValue(client: ClientSummary, column: ColumnKey) {
+    if (column === 'client') return client.client_name;
+    if (column === 'serial') return serialsFor(client).join(', ') || '—';
+    if (column === 'city') return client.city || '—';
+    if (column === 'branch') return client.branch || '—';
+    if (column === 'last') return client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : '—';
+    if (column === 'machines') return String(client.machine_count);
+    if (column === 'os') return String(client.service_count);
+    return treatmentText(client);
+  }
+
+  const optionMap = useMemo(() => {
+    const map = {} as Record<ColumnKey, string[]>;
+    const values: Record<ColumnKey, Set<string>> = {
+      client: new Set(), serial: new Set(), city: new Set(), branch: new Set(), last: new Set(), machines: new Set(), os: new Set(), treatment: new Set(),
+    };
+    for (const client of clients) {
+      values.client.add(client.client_name);
+      values.branch.add(client.branch || '—');
+      values.city.add(client.city || '—');
+      values.last.add(client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : '—');
+      values.machines.add(String(client.machine_count));
+      values.os.add(String(client.service_count));
+      values.treatment.add(treatmentText(client));
+      for (const serial of serialsByClient[retentionKey(client.client_name, client.branch)] || []) values.serial.add(serial);
+      for (const cityRow of citySummaries[client.client_key] || []) {
+        if (cityRow.city) values.city.add(cityRow.city);
+        for (const serial of cityRow.serials || []) values.serial.add(serial);
+      }
+    }
+    columnKeys.forEach((column) => { map[column] = Array.from(values[column]).filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })); });
+    return map;
+  }, [clients, serialsByClient, citySummaries, treatments]);
+
+  const hasActiveFilters = Boolean(search.trim() || recencyFilter || columnKeys.some((key) => filters[key].trim() || selectedFilters[key].length));
 
   const filtered = useMemo(() => {
     const rows = clients.flatMap((original) => {
       const cityContext = cityContextFor(original);
-      if (cityNeedle && !cityContext) return [];
+      if ((cityNeedle || selectedCities.length) && !cityContext) {
+        const originalCity = original.city || '—';
+        const cityTypedMatch = !cityNeedle || foldText(originalCity).includes(cityNeedle);
+        const citySelectedMatch = !selectedCities.length || selectedCities.includes(originalCity);
+        if (!cityTypedMatch || !citySelectedMatch) return [];
+      }
       const client = cityContext ? effectiveClientFor(original) : original;
       if (!client.last_service_at) return (!recencyFilter || recencyFilter === '18+') ? [client] : [];
       if (recencyFilter && recencyBucket(client.last_service_at) !== recencyFilter) return [];
@@ -301,15 +366,20 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       const globalText = `${client.client_name} ${client.city || ''} ${client.branch || ''} ${citiesForSearch(original)} ${serialText} ${treatment}`.toLowerCase();
       if (search && !globalText.includes(search.toLowerCase())) return [];
       if (futureClients.has(retentionKey(client.client_name, client.branch))) return [];
-      const formattedDate = dateFmt.format(new Date(client.last_service_at));
-      const matches = (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
-        (!filters.serial || serialText.toLowerCase().includes(filters.serial.toLowerCase())) &&
-        (!filters.branch || (client.branch || '').toLowerCase().includes(filters.branch.toLowerCase())) &&
-        (!filters.last || formattedDate.includes(filters.last)) &&
-        (!filters.machines || String(client.machine_count).includes(filters.machines.trim())) &&
-        (!filters.os || String(client.service_count).includes(filters.os.trim())) &&
-        (!filters.treatment || treatment.toLowerCase().includes(filters.treatment.toLowerCase()));
-      return matches ? [client] : [];
+
+      for (const column of columnKeys) {
+        if (column === 'city') continue;
+        const value = columnValue(client, column);
+        const typed = filters[column].trim();
+        if (typed && !foldText(value).includes(foldText(typed))) return [];
+        const selected = selectedFilters[column];
+        if (selected.length) {
+          if (column === 'serial') {
+            if (!clientSerials.some((serial) => selected.includes(serial))) return [];
+          } else if (!selected.includes(value)) return [];
+        }
+      }
+      return [client];
     });
 
     const direction = sortDirection === 'asc' ? 1 : -1;
@@ -327,15 +397,15 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       return String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
     });
     return rows;
-  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, sortKey, sortDirection, treatments, citySummaries, cityNeedle]);
+  }, [clients, recencyFilter, search, futureClients, serialsByClient, filters, selectedFilters, sortKey, sortDirection, treatments, citySummaries, cityNeedle, selectedCities]);
 
   const mapClients = useMemo(() => {
-    if (!cityNeedle) return filtered;
+    if (!cityNeedle && !selectedCities.length) return filtered;
     return filtered.map((client) => ({
       ...client,
       client_key: `${client.client_key}::CITY::${foldText(client.city)}`,
     }));
-  }, [filtered, cityNeedle]);
+  }, [filtered, cityNeedle, selectedCities]);
 
   const mapOriginalByKey = useMemo(() => {
     const result = new globalThis.Map<string, ClientSummary>();
@@ -354,6 +424,8 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
     setMapInitialized(true);
     setMode('map');
   }
+
+  const header = (column: ColumnKey, label: string, numeric = false) => <ColumnHeader column={column} label={label} activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters[column]} setFilter={(value) => updateFilter(column, value)} options={optionMap[column] || []} selected={selectedFilters[column]} setSelected={(values) => updateSelectedFilter(column, values)} numeric={numeric}/>;
 
   return <section className="list-page">
     <div className="list-toolbar">
@@ -375,14 +447,14 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
 
     {mode === 'list' && <div className="table-shell retention-table">
       <div className="table-head retention-columns retention-head">
-        <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
-        <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
-        <ColumnHeader column="city" label="Cidade" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.city} setFilter={(value) => updateFilter('city', value)}/>
-        <ColumnHeader column="branch" label="Filial" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.branch} setFilter={(value) => updateFilter('branch', value)}/>
-        <ColumnHeader column="last" label="Último atendimento" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.last} setFilter={(value) => updateFilter('last', value)}/>
-        <ColumnHeader column="machines" label="Máquinas" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.machines} setFilter={(value) => updateFilter('machines', value)} numeric/>
-        <ColumnHeader column="os" label="OS" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.os} setFilter={(value) => updateFilter('os', value)} numeric/>
-        <ColumnHeader column="treatment" label="Tratativa" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.treatment} setFilter={(value) => updateFilter('treatment', value)}/>
+        {header('client','Cliente')}
+        {header('serial','Série')}
+        {header('city','Cidade')}
+        {header('branch','Filial')}
+        {header('last','Último atendimento')}
+        {header('machines','Máquinas', true)}
+        {header('os','OS', true)}
+        {header('treatment','Tratativa')}
         <span></span>
       </div>
       {loading ? <div className="table-loading">Analisando histórico G4...</div> : filtered.length === 0 ? <EmptyState title="Nenhum cliente nessa faixa" text="Nenhum cliente corresponde aos filtros aplicados." /> : filtered.map((client) => {
