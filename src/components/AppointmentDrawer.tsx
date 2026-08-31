@@ -1,7 +1,7 @@
 import type { FormEvent } from 'react';
-import { Check, Loader2, Trash2 } from 'lucide-react';
+import { Check, Lightbulb, Loader2, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
-import type { Appointment, MachineSummary, Technician } from '../types';
+import type { MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
 
 const reasons = [
@@ -23,7 +23,6 @@ const reasons = [
   'Sem agenda',
   'Treinamento',
 ];
-const statuses = [['planejado','Planejado'],['confirmado','Confirmado'],['em_atendimento','Em atendimento'],['concluido','Concluído'],['cancelado','Cancelado']] as const;
 
 export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, machineContext, lastHourmeter, formError, saveBusy, onSubmit, onClose, onDelete, onSelectMachine, onSerialChange }: {
   draft: AppointmentDraft | null;
@@ -46,8 +45,12 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       <label className="serial-field">Série da máquina<input value={draft.equipment_serial} onChange={(e) => onSerialChange(e.target.value.toUpperCase())} placeholder="Digite parte da série" autoComplete="off" />{suggestions.length > 0 && <div className="suggestions">{suggestions.map((m) => <button type="button" key={m.serial} onClick={() => onSelectMachine(m)}><strong>{m.serial}</strong><span>{m.client_name || 'Cliente não informado'} · {m.city || 'Cidade não informada'}</span></button>)}</div>}</label>
       {machineContext && <div className="context-strip"><div><span>Último atendimento G4</span><strong>{machineContext.last_service_at ? new Intl.DateTimeFormat('pt-BR').format(new Date(machineContext.last_service_at)) : '—'}</strong></div><div><span>Histórico</span><strong>{machineContext.service_count} OS</strong></div><div><span>Última operação</span><strong>{machineContext.last_operation_type || '—'}</strong></div></div>}
       <div className="form-grid two"><label>Cliente<input value={draft.client_name} onChange={(e) => setDraft({ ...draft, client_name: e.target.value })} /></label><label>Cidade<input value={draft.service_city} onChange={(e) => setDraft({ ...draft, service_city: e.target.value })} /></label></div>
-      <div className="form-grid two"><label>Motivo do atendimento<select value={draft.service_reason} onChange={(e) => setDraft({ ...draft, service_reason: e.target.value })}><option value="">Selecione</option>{reasons.map((r) => <option key={r}>{r}</option>)}</select></label><label>Status<select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as Appointment['status'] })}>{statuses.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
+      <label>Motivo do atendimento<select value={draft.service_reason} onChange={(e) => setDraft({ ...draft, service_reason: e.target.value })}><option value="">Selecione</option>{reasons.map((r) => <option key={r}>{r}</option>)}</select></label>
       <label>Descrição<textarea rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Ex.: ar-condicionado com baixo rendimento" /></label>
+      <div style={{ display: 'grid', gap: 7, padding: '12px 14px', border: '1px solid #fde68a', borderRadius: 12, background: '#fffbeb' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#92400e' }}><Lightbulb size={16}/><strong>Insight</strong><small style={{ marginLeft: 'auto', fontWeight: 700 }}>Esboço</small></div>
+        <div style={{ color: '#78716c', fontSize: 12, lineHeight: 1.45 }}>Espaço reservado para um insight do atendimento. A lógica desta funcionalidade será desenvolvida depois.</div>
+      </div>
       <div className="hourmeter-block"><div><span>Último horímetro conhecido</span><strong>{lastHourmeter ? `${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h` : 'Sem leitura anterior'}</strong>{lastHourmeter && <small>{new Intl.DateTimeFormat('pt-BR').format(new Date(`${lastHourmeter.reading_date}T12:00:00`))}</small>}</div><label>Horímetro atual da máquina<input inputMode="decimal" value={draft.reported_hourmeter} onChange={(e) => setDraft({ ...draft, reported_hourmeter: e.target.value })} placeholder="Opcional" /></label>{lastHourmeter && draft.reported_hourmeter !== '' && Number(draft.reported_hourmeter) >= lastHourmeter.hourmeter && <div className="hourmeter-delta">+{(Number(draft.reported_hourmeter) - lastHourmeter.hourmeter).toLocaleString('pt-BR')} h</div>}</div>
       <label>Previsão de faturamento<input inputMode="decimal" value={draft.forecast_amount} onChange={(e) => setDraft({ ...draft, forecast_amount: e.target.value })} placeholder="0,00" /></label>
       {formError && <div className="form-error">{formError}</div>}
