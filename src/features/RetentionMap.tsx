@@ -68,7 +68,15 @@ type MapResponse = {
 };
 
 type RoadStats = { distance_km: number; duration_min: number };
-type RoadRoute = { technicianId: string; geometry: [number, number][]; stats?: RoadStats };
+type RoadSegment = {
+  fromSequence: number;
+  toSequence: number;
+  fromLabel: string;
+  toLabel: string;
+  geometry: [number, number][];
+  stats: RoadStats;
+};
+type RoadRoute = { technicianId: string; geometry: [number, number][]; stats?: RoadStats; segments: RoadSegment[] };
 
 function localIso(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -389,22 +397,50 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       : null;
 
     void Promise.all(candidates.map(async (group) => {
-      const rawStops = group.points.map((point) => displayedAppointmentPositions.get(point.id) || [point.lat, point.lng] as [number, number]);
-      const stops = rawStops.filter((point, index) => index === 0 || haversineKm(rawStops[index - 1], point) > 0.005);
-      if (stops.length < 2) return null;
+      const stopItems: { point: MapPoint; position: [number, number] }[] = [];
+      for (const point of group.points) {
+        const position = displayedAppointmentPositions.get(point.id) || [point.lat, point.lng] as [number, number];
+        if (!stopItems.length || haversineKm(stopItems[stopItems.length - 1].position, position) > 0.005) stopItems.push({ point, position });
+      }
+      if (stopItems.length < 2) return null;
 
-      const coords = stops.map(([lat, lng]) => `${lng},${lat}`).join(';');
+      const coords = stopItems.map(({ position: [lat, lng] }) => `${lng},${lat}`).join(';');
       try {
-        const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`, { signal: controller.signal });
+        const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`, { signal: controller.signal });
         if (!response.ok) throw new Error('routing_failed');
         const json = await response.json();
         const best = json?.routes?.[0];
         const geometry = best?.geometry?.coordinates;
-        if (!Array.isArray(geometry) || geometry.length < 2) throw new Error('routing_failed');
+        const legs = best?.legs;
+        if (!Array.isArray(geometry) || geometry.length < 2 || !Array.isArray(legs)) throw new Error('routing_failed');
+
+        const segments: RoadSegment[] = legs.flatMap((leg: any, index: number) => {
+          const stepCoordinates = Array.isArray(leg?.steps)
+            ? leg.steps.flatMap((step: any) => Array.isArray(step?.geometry?.coordinates) ? step.geometry.coordinates : [])
+            : [];
+          if (stepCoordinates.length < 2 || !stopItems[index] || !stopItems[index + 1]) return [];
+          const fromPoint = stopItems[index].point;
+          const toPoint = stopItems[index + 1].point;
+          const fromId = fromPoint.id.replace('appointment:', '');
+          const toId = toPoint.id.replace('appointment:', '');
+          return [{
+            fromSequence: sequenceByAppointment.get(fromId) || index + 1,
+            toSequence: sequenceByAppointment.get(toId) || index + 2,
+            fromLabel: fromPoint.client_name || fromPoint.service_city || fromPoint.city || 'Atendimento',
+            toLabel: toPoint.client_name || toPoint.service_city || toPoint.city || 'Atendimento',
+            geometry: stepCoordinates.map((item: number[]) => [Number(item[1]), Number(item[0])] as [number, number]),
+            stats: {
+              distance_km: Math.round((Number(leg.distance || 0) / 1000) * 10) / 10,
+              duration_min: Math.round(Number(leg.duration || 0) / 60),
+            },
+          }];
+        });
+
         return {
           technicianId: group.technicianId,
           geometry: geometry.map((item: number[]) => [Number(item[1]), Number(item[0])] as [number, number]),
           stats: { distance_km: Math.round((Number(best.distance || 0) / 1000) * 10) / 10, duration_min: Math.round(Number(best.duration || 0) / 60) },
+          segments,
         } satisfies RoadRoute;
       } catch (routeError: any) {
         if (routeError?.name === 'AbortError') return null;
@@ -415,6 +451,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
             stats: serverFallback.distance_km != null && serverFallback.duration_min != null
               ? { distance_km: serverFallback.distance_km, duration_min: serverFallback.duration_min }
               : undefined,
+            segments: [],
           } satisfies RoadRoute;
         }
         setRoadErrorIds((current) => current.includes(group.technicianId) ? current : [...current, group.technicianId]);
@@ -426,7 +463,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     });
 
     return () => controller.abort();
-  }, [data.route, displayedAppointmentPositions, routeGroups, technicianIds]);
+  }, [data.route, displayedAppointmentPositions, routeGroups, sequenceByAppointment, technicianIds]);
 
   const selectedRoadRoute = routeTechnicianId ? roadRoutes.find((route) => route.technicianId === routeTechnicianId) : undefined;
   const fitRoute = routeTechnicianId
@@ -458,7 +495,17 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <FitMap points={fitPoints} route={fitRoute} />
-        {roadRoutes.map((route) => <Polyline key={`road:${route.technicianId}`} positions={route.geometry} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 5 : 4, opacity: routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }} />)}
+        {roadRoutes.flatMap((route) => route.segments.length
+          ? route.segments.map((segment) => <Polyline key={`road:${route.technicianId}:${segment.fromSequence}-${segment.toSequence}`} positions={segment.geometry} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 6 : 5, opacity: routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }}>
+              <Tooltip sticky>Agenda {segment.fromSequence} → {segment.toSequence} · {segment.stats.distance_km.toLocaleString('pt-BR')} km · {durationLabel(segment.stats.duration_min)}</Tooltip>
+              <Popup minWidth={245}><div className="map-popup-card technician-card">
+                <strong>🚙 Agenda {segment.fromSequence} → Agenda {segment.toSequence}</strong>
+                <span>{segment.fromLabel} → {segment.toLabel}</span>
+                <small>Distância pela malha viária: {segment.stats.distance_km.toLocaleString('pt-BR')} km</small>
+                <small>Tempo estimado de deslocamento: {durationLabel(segment.stats.duration_min)}</small>
+              </div></Popup>
+            </Polyline>)
+          : [<Polyline key={`road:${route.technicianId}:full`} positions={route.geometry} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 5 : 4, opacity: routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }} />])}
 
         {clientPoints.map((point) => {
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
@@ -506,6 +553,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       {!routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. Cada rota começa no primeiro atendimento do técnico e segue aos próximos clientes pela malha rodoviária; a filial permanece apenas como referência visual.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. Clique em qualquer trecho da rota para ver distância e tempo entre uma agenda e a próxima.</div>
   </div>;
 }
