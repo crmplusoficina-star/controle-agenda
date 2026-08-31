@@ -258,7 +258,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   const [holdingClientKey, setHoldingClientKey] = useState<string | null>(null);
   const [editingClientKey, setEditingClientKey] = useState<string | null>(null);
   const [savingLocation, setSavingLocation] = useState(false);
-  const [hoveredRouteTechnicianId, setHoveredRouteTechnicianId] = useState<string | null>(null);
   const [pinnedRouteTechnicianId, setPinnedRouteTechnicianId] = useState<string | null>(null);
   const holdTimerRef = useRef<number | null>(null);
 
@@ -618,13 +617,13 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   const requestedClients = data.requested_clients ?? clients.length;
   const editingClient = editingClientKey ? clientByKey.get(editingClientKey) : undefined;
   const mapInteractionLocked = Boolean(holdingClientKey || editingClientKey);
-  const focusedRouteTechnicianId = routeTechnicianId || pinnedRouteTechnicianId || hoveredRouteTechnicianId || '';
+  const focusedRouteTechnicianId = routeTechnicianId || pinnedRouteTechnicianId || '';
   const focusedRouteName = focusedRouteTechnicianId ? technicians.find((item) => item.id === focusedRouteTechnicianId)?.name || 'Técnico' : '';
   const routeAppearance = (technicianId: string) => {
     const focused = focusedRouteTechnicianId === technicianId;
     const muted = Boolean(focusedRouteTechnicianId && !focused);
     if (editingClientKey) return { color: '#64748b', weight: 2, opacity: 0.08 };
-    if (focused) return { color: '#1d4ed8', weight: 7, opacity: 1 };
+    if (focused) return { color: '#1d4ed8', weight: 3, opacity: 1 };
     if (muted) return { color: '#64748b', weight: 2, opacity: 0.07 };
     return { color: '#64748b', weight: 3, opacity: 0.28 };
   };
@@ -633,7 +632,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     <div className="map-toolbar">
       <div><strong>Mapa de retenção</strong><span>{weekLabel} · {requestedClients.toLocaleString('pt-BR')} clientes analisados</span></div>
       <div className="map-toolbar-actions">
-        <CheckboxMultiSelect label="Técnico" items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))} selected={technicianIds} onChange={(next) => { setTechnicianIds(next); setHoveredRouteTechnicianId(null); setPinnedRouteTechnicianId(null); }} allLabel="Todos os técnicos" compact />
+        <CheckboxMultiSelect label="Técnico" items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))} selected={technicianIds} onChange={(next) => { setTechnicianIds(next); setPinnedRouteTechnicianId(null); }} allLabel="Todos os técnicos" compact />
         <button type="button" className="subtle-button" onClick={() => void loadMap()} disabled={loading || mapInteractionLocked}>{loading ? <Loader2 className="spin" size={15}/> : <RefreshCw size={15}/>} Atualizar</button>
       </div>
     </div>
@@ -648,7 +647,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     {routeTechnicianId && roadErrorIds.includes(routeTechnicianId) && routeAppointmentPoints.length >= 2 && <div className="map-message error">Os atendimentos estão localizados, mas a malha rodoviária não respondeu agora.</div>}
 
     <div className={`retention-map ${editingClientKey ? 'location-edit-active' : ''}`}>
-      {!routeTechnicianId && focusedRouteTechnicianId && !editingClientKey && <div className="route-focus-banner"><strong>🧑‍🔧 {focusedRouteName}</strong><span>{pinnedRouteTechnicianId === focusedRouteTechnicianId ? 'Rota fixada · clique no mapa para limpar' : 'Rota em destaque'}</span></div>}
+      {!routeTechnicianId && pinnedRouteTechnicianId && !editingClientKey && <div className="route-focus-banner"><strong>🧑‍🔧 {focusedRouteName}</strong><span>Rota fixada · clique no mapa para limpar</span></div>}
       {holdingClientKey && !editingClientKey && <div className="client-location-hold-banner"><span className="hold-progress"/>Mantenha pressionado por 5 segundos. O mapa e o zoom ficam travados durante a confirmação.</div>}
       {editingClient && <div className="client-location-edit-banner"><div><strong>📍 Ajustando localização oficial</strong><span>{editingClient.client_name} · edição liberada. Solte o botão e arraste o pino para o ponto correto; ao soltar, salva para todos.</span></div><button type="button" onClick={() => { setEditingClientKey(null); setSavingLocation(false); }} disabled={savingLocation}><X size={14}/> Cancelar</button></div>}
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
@@ -660,8 +659,12 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const appearance = routeAppearance(route.technicianId);
           const technicianName = technicians.find((item) => item.id === route.technicianId)?.name || 'Técnico';
           const handlers = {
-            mouseover: () => setHoveredRouteTechnicianId(route.technicianId),
-            mouseout: () => setHoveredRouteTechnicianId((current) => current === route.technicianId ? null : current),
+            mouseover: (event: any) => {
+              if (!routeTechnicianId && !pinnedRouteTechnicianId) event.target.setStyle({ color: '#1d4ed8', weight: 3, opacity: 0.95 });
+            },
+            mouseout: (event: any) => {
+              if (!routeTechnicianId && !pinnedRouteTechnicianId) event.target.setStyle({ color: '#64748b', weight: 3, opacity: 0.28 });
+            },
             click: (event: any) => {
               L.DomEvent.stopPropagation(event.originalEvent);
               setPinnedRouteTechnicianId((current) => current === route.technicianId ? null : route.technicianId);
@@ -747,6 +750,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       {!routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · em Todos os técnicos, passe sobre uma rota para destacar a rota inteira daquele técnico; clique para fixar e clique no mapa para limpar. Clientes mantêm o mesmo tamanho; a cor representa somente a retenção.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · em Todos os técnicos, passe sobre um trecho para identificar sem recarregar o mapa; clique para fixar a rota inteira do técnico e clique no mapa para limpar. Clientes mantêm o mesmo tamanho; a cor representa somente a retenção.</div>
   </div>;
 }
