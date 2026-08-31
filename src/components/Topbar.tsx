@@ -5,6 +5,7 @@ import type { Branch, Insight, ViewName } from '../types';
 import './session.css';
 
 const titles: Record<ViewName, { title: string; subtitle: string }> = {
+  inicio: { title: 'Início', subtitle: 'Seu dia, seus próximos contatos e a meta de prospecção.' },
   agenda: { title: 'Agenda', subtitle: 'Organize o atendimento sem perder o contexto.' },
   retencao: { title: 'Retenção', subtitle: 'Clientes que merecem atenção, sem transformar tudo em oportunidade.' },
   followup: { title: 'Follow-up', subtitle: 'Retornos e oportunidades em uma fila simples.' },
