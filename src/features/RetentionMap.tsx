@@ -301,11 +301,10 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
         && (!cityKey || fold(client.city) === cityKey);
     });
     const matchingClientPoint = serialClientPoint || nameClientPoint;
+    const matchingClientPosition = matchingClientPoint ? visiblePosition(matchingClientPoint) : undefined;
     const branchCity = cityCenters.byBranchCity.get(`${fold(appointment.branch)}|${cityKey}`);
     const uniqueCity = cityCenters.byUniqueCity.get(cityKey);
-    const trustedCenter: [number, number] | undefined = matchingClientPoint
-      ? [matchingClientPoint.lat, matchingClientPoint.lng]
-      : branchCity || uniqueCity;
+    const trustedCenter: [number, number] | undefined = matchingClientPosition || branchCity || uniqueCity;
 
     const serverPoint = serverAppointmentById.get(appointment.id);
     const serverValid = Boolean(serverPoint
@@ -317,8 +316,8 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     let locationSource = '';
     let locationLabel: string | null = null;
 
-    if (matchingClientPoint) {
-      position = [matchingClientPoint.lat, matchingClientPoint.lng];
+    if (matchingClientPoint && matchingClientPosition) {
+      position = matchingClientPosition;
       precision = matchingClientPoint.precision || 'city';
       locationSource = serialClientPoint ? 'trusted-client-serial-position' : 'trusted-client-name-position';
       locationLabel = matchingClientPoint.location_label || null;
