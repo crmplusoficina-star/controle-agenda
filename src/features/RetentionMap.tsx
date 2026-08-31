@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { CalendarPlus, Loader2, MapPinned, RefreshCw, Route } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -71,24 +71,19 @@ function relativeDayLabel(dateValue: string) {
   return shortDayFmt.format(date).replace('.', '').toUpperCase();
 }
 
-function normalizeCity(value?: string | null) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toUpperCase();
+function hashText(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  return Math.abs(hash);
 }
 
-function cityClusterIcon(count: number) {
-  const size = Math.min(64, 38 + Math.round(Math.log2(Math.max(2, count)) * 5));
-  return L.divIcon({
-    className: 'retention-city-cluster-icon',
-    html: `<div class="retention-city-cluster-bubble"><strong>${count}</strong><span>clientes</span></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -(size / 2)],
-  });
+function visiblePosition(point: MapPoint): [number, number] {
+  if (point.precision !== 'city') return [point.lat, point.lng];
+  const hash = hashText(point.client_key || point.id);
+  const angle = ((hash % 360) * Math.PI) / 180;
+  const ring = 1 + ((Math.floor(hash / 360) % 4));
+  const distance = 0.0035 * ring;
+  return [point.lat + Math.sin(angle) * distance, point.lng + Math.cos(angle) * distance];
 }
 
 function FitMap({ points, route }: { points: MapPoint[]; route: MapResponse['route'] }) {
@@ -96,7 +91,7 @@ function FitMap({ points, route }: { points: MapPoint[]; route: MapResponse['rou
   useEffect(() => {
     const coordinates: [number, number][] = route?.geometry?.length
       ? route.geometry
-      : points.map((point) => [point.lat, point.lng]);
+      : points.map((point) => point.kind === 'client' ? visiblePosition(point) : [point.lat, point.lng]);
     if (!coordinates.length) return;
     if (coordinates.length === 1) {
       map.setView(coordinates[0], 11);
@@ -149,7 +144,7 @@ export function RetentionMap({
   const clientByKey = useMemo(() => new Map(clients.map((client) => [client.client_key, client])), [clients]);
 
   const planningByAppointment = useMemo(() => {
-    const result = new Map<string, { label: string; relative: 'today' | 'tomorrow' | 'later'; sequence: number; count: number }>();
+    const result = new Map<string, { label: string; relative: 'today' | 'tomorrow' | 'later' }>();
     const groups = new Map<string, Appointment[]>();
     for (const item of appointments) {
       const key = `${item.technician_id}|${item.appointment_date}`;
@@ -166,7 +161,7 @@ export function RetentionMap({
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         const relative = item.appointment_date === today ? 'today' : item.appointment_date === localIso(tomorrow) ? 'tomorrow' : 'later';
-        result.set(item.id, { label, relative, sequence: index + 1, count: group.length });
+        result.set(item.id, { label, relative });
       });
     }
     return result;
@@ -198,11 +193,8 @@ export function RetentionMap({
       body: { clients: payloadClients, appointments: payloadAppointments, technician_id: routeTechnicianId || null },
     });
 
-    if (invokeError) {
-      setError('Não consegui carregar os pontos do mapa agora. A lista continua disponível normalmente.');
-    } else {
-      setData((response || { points: [], route: null, unresolved: 0, geocoded_now: 0 }) as MapResponse);
-    }
+    if (invokeError) setError('Não consegui carregar os pontos do mapa agora. A lista continua disponível normalmente.');
+    else setData((response || { points: [], route: null, unresolved: 0, geocoded_now: 0 }) as MapResponse);
     setLoading(false);
   }, [appointments, clients, routeTechnicianId, technicianIds, technicians]);
 
@@ -211,35 +203,8 @@ export function RetentionMap({
   const routeLabel = routeTechnicianId
     ? scheduledTechnicians.find((technician) => technician.id === routeTechnicianId)?.name || 'Técnico selecionado'
     : '';
-
   const clientPoints = useMemo(() => data.points.filter((point) => point.kind === 'client'), [data.points]);
   const appointmentPoints = useMemo(() => data.points.filter((point) => point.kind === 'appointment' && (!technicianIds.length || (point.technician_id && technicianIds.includes(point.technician_id)))), [data.points, technicianIds]);
-  const cityClusters = useMemo(() => {
-    const groups = new Map<string, MapPoint[]>();
-    for (const point of clientPoints) {
-      if (point.precision !== 'city' || !point.city) continue;
-      const cityKey = normalizeCity(point.city);
-      const stateKey = String(point.state || '').trim().toUpperCase();
-      if (!cityKey) continue;
-      const key = `${cityKey}|${stateKey}`;
-      const group = groups.get(key) || [];
-      group.push(point);
-      groups.set(key, group);
-    }
-    return Array.from(groups.entries())
-      .filter(([, points]) => points.length > 1)
-      .map(([key, points]) => ({
-        key,
-        points,
-        city: points[0].city || 'Cidade não informada',
-        state: points[0].state || '',
-        lat: points[0].lat,
-        lng: points[0].lng,
-        nearRouteCount: points.filter((point) => point.near_route).length,
-        approximateCount: points.length,
-      }));
-  }, [clientPoints]);
-  const clusteredClientIds = useMemo(() => new Set(cityClusters.flatMap((cluster) => cluster.points.map((point) => point.id))), [cityClusters]);
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
 
@@ -265,7 +230,6 @@ export function RetentionMap({
     <div className="map-legend interactive">
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
       <span><i className="tech-dot"/> agenda do técnico</span>
-      <span><i className="city-cluster-legend"/> clientes sem endereço exato na cidade</span>
     </div>
 
     {error && <div className="map-message error">{error}</div>}
@@ -278,39 +242,7 @@ export function RetentionMap({
 
         {data.route?.geometry?.length ? <Polyline positions={data.route.geometry} pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.76 }} /> : null}
 
-        {cityClusters.map((cluster) => {
-          const clusterClients = cluster.points
-            .map((point) => point.client_key ? clientByKey.get(point.client_key) : undefined)
-            .filter((client): client is ClientSummary => Boolean(client));
-          const recencyCounts = retentionRecency.map((item) => ({
-            ...item,
-            count: cluster.points.filter((point) => recencyColor(point.last_service_at) === item.color).length,
-          })).filter((item) => item.count > 0);
-          return <Marker key={cluster.key} position={[cluster.lat, cluster.lng]} icon={cityClusterIcon(cluster.points.length)}>
-            <Tooltip direction="top" offset={[0, -12]}>{cluster.city}{cluster.state ? ` - ${cluster.state}` : ''} · {cluster.points.length} clientes</Tooltip>
-            <Popup minWidth={300} maxWidth={340}>
-              <div className="map-popup-card city-cluster-card">
-                <strong>{cluster.city}{cluster.state ? ` - ${cluster.state}` : ''}</strong>
-                <span>{cluster.points.length} clientes sem endereço exato nesta cidade</span>
-                {routeTechnicianId && cluster.nearRouteCount > 0 && <small className="near-route-note">{cluster.nearRouteCount} cliente{cluster.nearRouteCount === 1 ? '' : 's'} próximo{cluster.nearRouteCount === 1 ? '' : 's'} da rota selecionada</small>}
-                <div className="city-cluster-recency">
-                  {recencyCounts.map((item) => <span key={item.key}><i style={{ background: item.color }}/><strong>{item.count}</strong> {item.label}</span>)}
-                </div>
-                <div className="city-cluster-client-list">
-                  {clusterClients.slice(0, 8).map((client) => <button type="button" key={client.client_key} onClick={() => onOpen(client)}>
-                    <span>{client.client_name}</span>
-                    <small>{client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : 'Sem data'} · {client.machine_count} máquina{client.machine_count === 1 ? '' : 's'}</small>
-                  </button>)}
-                </div>
-                {clusterClients.length > 8 && <small className="city-cluster-more">+{clusterClients.length - 8} outros clientes nesta cidade</small>}
-                <small>Esta bolha usa somente a cidade porque não há endereço confiável para esses clientes.</small>
-              </div>
-            </Popup>
-          </Marker>;
-        })}
-
         {clientPoints.map((point) => {
-          if (clusteredClientIds.has(point.id)) return null;
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
           if (!client) return null;
           const serials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
@@ -318,9 +250,9 @@ export function RetentionMap({
           const emphasized = Boolean(routeTechnicianId && point.near_route);
           return <CircleMarker
             key={point.id}
-            center={[point.lat, point.lng]}
+            center={visiblePosition(point)}
             radius={emphasized ? 8 : routeTechnicianId ? 5 : 6}
-            pathOptions={{ color: emphasized ? '#0f172a' : '#fff', weight: emphasized ? 2.5 : 1.5, fillColor: color, fillOpacity: emphasized ? 1 : routeTechnicianId ? 0.48 : 0.86 }}
+            pathOptions={{ color: emphasized ? '#0f172a' : '#fff', weight: emphasized ? 2.5 : 1.5, fillColor: color, fillOpacity: emphasized ? 1 : routeTechnicianId ? 0.48 : 0.9 }}
           >
             <Tooltip direction="top" offset={[0, -5]}>{client.client_name}{emphasized && point.route_distance_km != null ? ` · ${point.route_distance_km} km da rota` : ''}</Tooltip>
             <Popup minWidth={250}>
@@ -328,7 +260,7 @@ export function RetentionMap({
                 <strong>{client.client_name}</strong>
                 <span>{client.city || 'Cidade não informada'} · {serials.length} máquina{serials.length === 1 ? '' : 's'}</span>
                 <small>{point.last_service_at ? `Último atendimento: ${dateFmt.format(new Date(point.last_service_at))}` : 'Sem data de atendimento'}</small>
-                {point.precision === 'city' && <small>Localização aproximada pela cidade</small>}
+                {point.precision === 'city' && <small>Posição aproximada pela cidade</small>}
                 {point.precision !== 'city' && point.location_label && <small>Endereço localizado: {point.location_label}</small>}
                 {emphasized && point.route_distance_km != null && <small className="near-route-note">Aprox. {point.route_distance_km} km da rota do técnico</small>}
                 {serials.length > 0 && <small className="map-popup-serial">{serials.slice(0, 2).join(' · ')}{serials.length > 2 ? ` +${serials.length - 2}` : ''}</small>}
@@ -374,6 +306,6 @@ export function RetentionMap({
       {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para traçar a rota</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · endereço confiável aparece como ponto individual; sem endereço, o cliente fica agrupado somente pela cidade e UF.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · cada cliente aparece individualmente com a cor do tempo desde o último atendimento.</div>
   </div>;
 }
