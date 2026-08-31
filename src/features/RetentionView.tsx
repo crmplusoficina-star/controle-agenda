@@ -30,6 +30,7 @@ type ColumnKey = 'client' | 'serial' | 'city' | 'branch' | 'last' | 'machines' |
 type SortDirection = 'asc' | 'desc';
 
 const columnKeys: ColumnKey[] = ['client', 'serial', 'city', 'branch', 'last', 'machines', 'os', 'treatment'];
+const emptyFilters = (): Record<ColumnKey, string> => ({ client: '', serial: '', city: '', branch: '', last: '', machines: '', os: '', treatment: '' });
 function storedSort(): { key: ColumnKey; direction: SortDirection } {
   try {
     const saved = JSON.parse(window.localStorage.getItem(RETENTION_SORT_STORAGE_KEY) || '{}') as { key?: string; direction?: string };
@@ -151,11 +152,12 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const initialSort = useMemo(storedSort, []);
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'list' | 'map'>('list');
+  const [mapInitialized, setMapInitialized] = useState(false);
   const [recencyFilter, setRecencyFilter] = useState<RecencyBucket | null>(null);
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
   const [sortKey, setSortKey] = useState<ColumnKey>(initialSort.key);
   const [sortDirection, setSortDirection] = useState<SortDirection>(initialSort.direction);
-  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', branch: '', last: '', machines: '', os: '', treatment: '' });
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>(emptyFilters);
   const [treatments, setTreatments] = useState<Record<string, Followup>>({});
   const [citySummaries, setCitySummaries] = useState<Record<string, ClientCitySummary[]>>({});
 
@@ -277,6 +279,14 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   function updateFilter(column: ColumnKey, value: string) { setFilters((current) => ({ ...current, [column]: value })); }
   function updateSort(column: ColumnKey, direction: SortDirection) { setSortKey(column); setSortDirection(direction); setActiveColumn(null); }
   function applyRecencyFilter(bucket: RecencyBucket | null) { setRecencyFilter(bucket); }
+  function clearAllFilters() {
+    setSearch('');
+    setRecencyFilter(null);
+    setFilters(emptyFilters());
+    setActiveColumn(null);
+  }
+
+  const hasActiveFilters = Boolean(search.trim() || recencyFilter || columnKeys.some((key) => filters[key].trim()));
 
   const filtered = useMemo(() => {
     const rows = clients.flatMap((original) => {
@@ -340,20 +350,30 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 5);
   const weekLabel = `Agenda ${shortDateFmt.format(weekStart)}–${shortDateFmt.format(weekEnd)}`;
 
+  function openMap() {
+    setMapInitialized(true);
+    setMode('map');
+  }
+
   return <section className="list-page">
     <div className="list-toolbar">
       <div className="search-box"><Search size={18}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente, série, cidade ou filial" /></div>
       <div className="retention-toolbar-right">
+        {hasActiveFilters && <button type="button" className="subtle-button" onClick={clearAllFilters} title="Limpar todos os filtros"><X size={14}/> Limpar filtro</button>}
         <div className="retention-view-switch" aria-label="Alternar visualização">
           <button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}><List size={14}/> Lista</button>
-          <button type="button" className={mode === 'map' ? 'active' : ''} onClick={() => setMode('map')}><Map size={14}/> Mapa</button>
+          <button type="button" className={mode === 'map' ? 'active' : ''} onClick={openMap}><Map size={14}/> Mapa</button>
         </div>
       </div>
     </div>
 
     {mode === 'list' && <RecencyLegend active={recencyFilter} onChange={applyRecencyFilter}/>} 
 
-    {mode === 'map' ? <RetentionMap clients={mapClients} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={applyRecencyFilter} onOpen={(client) => onOpen(originalMapClient(client))} onFollowup={(client) => onFollowup(originalMapClient(client))} onSchedule={(client, serial, technicianId) => onSchedule(originalMapClient(client), serial, technicianId)} /> : <div className="table-shell retention-table">
+    {mapInitialized && <div style={{ display: mode === 'map' ? 'block' : 'none' }} aria-hidden={mode !== 'map'}>
+      <RetentionMap clients={mapClients} serialsByClient={serialsByClient} appointments={appointments} technicians={technicians} weekLabel={weekLabel} recencyFilter={recencyFilter} onRecencyFilter={applyRecencyFilter} onOpen={(client) => onOpen(originalMapClient(client))} onFollowup={(client) => onFollowup(originalMapClient(client))} onSchedule={(client, serial, technicianId) => onSchedule(originalMapClient(client), serial, technicianId)} />
+    </div>}
+
+    {mode === 'list' && <div className="table-shell retention-table">
       <div className="table-head retention-columns retention-head">
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
