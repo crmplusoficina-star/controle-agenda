@@ -120,6 +120,12 @@ function canonicalClientKey(value?: string | null) {
   return String(value || '').split('::CITY::')[0];
 }
 
+function appointmentVisualGroupKey(point: MapPoint) {
+  const serial = serialKey(point.equipment_serial);
+  if (!serial) return point.id;
+  return `machine:${fold(point.client_name)}|${serial}|${fold(point.branch)}`;
+}
+
 function isTravelAppointment(point: Pick<MapPoint, 'service_reason' | 'description' | 'client_name'>) {
   const text = fold(`${point.service_reason || ''} ${point.description || ''} ${point.client_name || ''}`);
   return text.includes('deslocamento') || text.includes('desloc') || text.includes('viagem');
@@ -177,11 +183,12 @@ const branchMarkerIcon = L.divIcon({
   iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -18],
 });
 
-function agendaIcon(sequence: number, travel = false) {
+function agendaIcon(sequence: number, travel = false, badgeLabel?: string) {
   const emoji = travel ? '🚗' : '🧑‍🔧';
+  const badge = badgeLabel || String(sequence);
   return L.divIcon({
     className: '',
-    html: `<div style="position:relative;width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;background:${travel ? '#fef3c7' : '#dbeafe'};border:3px solid ${travel ? '#d97706' : '#1d4ed8'};box-shadow:0 5px 14px rgba(15,23,42,.28);box-sizing:border-box">${emoji}<b style="position:absolute;right:-6px;top:-7px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#0f172a;color:white;border:2px solid white;font:800 10px/14px Arial;text-align:center;box-sizing:border-box">${sequence}</b></div>`,
+    html: `<div style="position:relative;width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;background:${travel ? '#fef3c7' : '#dbeafe'};border:3px solid ${travel ? '#d97706' : '#1d4ed8'};box-shadow:0 5px 14px rgba(15,23,42,.28);box-sizing:border-box">${emoji}<b style="position:absolute;right:-8px;top:-7px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#0f172a;color:white;border:2px solid white;font:800 10px/14px Arial;text-align:center;box-sizing:border-box">${badge}</b></div>`,
     iconSize: [40, 40], iconAnchor: [20, 20], popupAnchor: [0, -21],
   });
 }
@@ -624,9 +631,40 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
   const displayedAppointmentPositions = useMemo(() => {
     const map = new Map<string, [number, number]>();
-    appointmentPoints.forEach((point, index) => map.set(point.id, agendaVisiblePosition(appointmentPoints, index)));
+    const grouped = new Map<string, MapPoint[]>();
+    for (const point of appointmentPoints) {
+      const key = appointmentVisualGroupKey(point);
+      const current = grouped.get(key) || [];
+      current.push(point);
+      grouped.set(key, current);
+    }
+    const representatives = Array.from(grouped.values()).map((points) => points[0]);
+    representatives.forEach((representative, index) => {
+      const position = agendaVisiblePosition(representatives, index);
+      const group = grouped.get(appointmentVisualGroupKey(representative)) || [representative];
+      group.forEach((point) => map.set(point.id, position));
+    });
     return map;
   }, [appointmentPoints]);
+
+  const appointmentMarkerGroups = useMemo(() => {
+    const grouped = new Map<string, MapPoint[]>();
+    for (const point of appointmentPoints) {
+      const key = appointmentVisualGroupKey(point);
+      const current = grouped.get(key) || [];
+      current.push(point);
+      grouped.set(key, current);
+    }
+    return Array.from(grouped.entries()).map(([key, points]) => {
+      const sorted = points.slice().sort((a, b) => String(a.appointment_date || '').localeCompare(String(b.appointment_date || '')) || a.id.localeCompare(b.id));
+      const first = sorted[0];
+      return {
+        key,
+        points: sorted,
+        position: displayedAppointmentPositions.get(first.id) || [first.lat, first.lng] as [number, number],
+      };
+    });
+  }, [appointmentPoints, displayedAppointmentPositions]);
 
   const routeGroups = useMemo(() => {
     const groups = new Map<string, MapPoint[]>();
@@ -883,23 +921,42 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           </CircleMarker>;
         })}
 
-        {appointmentPoints.map((point, index) => {
-          const appointmentId = point.id.replace('appointment:', '');
-          const sequence = sequenceByAppointment.get(appointmentId) || index + 1;
-          const selected = Boolean(routeTechnicianId && point.technician_id === routeTechnicianId);
-          const routeFocused = Boolean(focusedRouteTechnicianId && point.technician_id === focusedRouteTechnicianId);
+        {appointmentMarkerGroups.map((group, groupIndex) => {
+          const first = group.points[0];
+          const sequences = group.points.map((point) => sequenceByAppointment.get(point.id.replace('appointment:', '')) || groupIndex + 1);
+          const selected = Boolean(routeTechnicianId && group.points.some((point) => point.technician_id === routeTechnicianId));
+          const routeFocused = Boolean(focusedRouteTechnicianId && group.points.some((point) => point.technician_id === focusedRouteTechnicianId));
           const routeMuted = Boolean(focusedRouteTechnicianId && !routeFocused);
-          const travel = isTravelAppointment(point);
-          const dayLabel = point.appointment_date ? relativeDayLabel(point.appointment_date) : 'AGENDA';
-          const tooltip = `${travel ? 'Deslocamento' : `Agenda ${sequence}`} · ${point.technician_name || 'Técnico'}${point.service_city ? ` · ${point.service_city}` : ''}`;
-          return <Marker key={point.id} position={displayedAppointmentPositions.get(point.id) || [point.lat, point.lng]} icon={agendaIcon(sequence, travel)} zIndexOffset={selected || routeFocused ? 1200 : 800} interactive={!editingClientKey && !editMode} opacity={editingClientKey || editMode ? 0.16 : routeMuted ? 0.18 : 1}>
-            <Tooltip permanent={selected && !editingClientKey && !editMode} direction="top" offset={[0, -21]} className="technician-tooltip">{selected ? `${sequence}. ${dayLabel} · ${point.service_city || point.city || 'Destino'}` : tooltip}</Tooltip>
-            <Popup minWidth={260}><div className="map-popup-card technician-card">
-              <strong>{travel ? `🚗 Deslocamento ${sequence}` : `🧑‍🔧 Agenda ${sequence}`} · {point.technician_name || 'Técnico agendado'}</strong>
-              <span>{point.appointment_date ? dateFmt.format(new Date(`${point.appointment_date}T12:00:00`)) : ''} · {point.service_city || point.city || 'Cidade não informada'}</span>
-              {!travel && <small>{point.client_name || 'Cliente não informado'}</small>}
-              {travel && <small>Deslocamento registrado na agenda.</small>}
-              {point.service_reason && <small>{point.service_reason}</small>}{point.equipment_serial && <small>{point.equipment_serial}</small>}
+          const travelOnly = group.points.every((point) => isTravelAppointment(point));
+          const multiple = group.points.length > 1;
+          const badge = multiple ? `×${group.points.length}` : String(sequences[0]);
+          const tooltip = multiple
+            ? `${group.points.length} agendamentos · ${first.client_name || 'Cliente'}${first.equipment_serial ? ` · ${first.equipment_serial}` : ''}`
+            : `${travelOnly ? 'Deslocamento' : `Agenda ${sequences[0]}`} · ${first.technician_name || 'Técnico'}${first.service_city ? ` · ${first.service_city}` : ''}`;
+          return <Marker key={`agenda-group:${group.key}`} position={group.position} icon={agendaIcon(sequences[0], travelOnly, badge)} zIndexOffset={selected || routeFocused ? 1200 : 800} interactive={!editingClientKey && !editMode} opacity={editingClientKey || editMode ? 0.16 : routeMuted ? 0.18 : 1}>
+            <Tooltip permanent={selected && !editingClientKey && !editMode} direction="top" offset={[0, -21]} className="technician-tooltip">{multiple ? `${group.points.length} agendas · ${first.service_city || first.city || 'Destino'}` : selected && first.appointment_date ? `${sequences[0]}. ${relativeDayLabel(first.appointment_date)} · ${first.service_city || first.city || 'Destino'}` : tooltip}</Tooltip>
+            <Popup minWidth={multiple ? 320 : 260}><div className="map-popup-card technician-card">
+              {multiple ? <>
+                <strong>🧑‍🔧 {group.points.length} agendamentos · {first.client_name || 'Cliente'}</strong>
+                <span>{first.service_city || first.city || 'Cidade não informada'}{first.equipment_serial ? ` · ${first.equipment_serial}` : ''}</span>
+                <div style={{ display: 'grid', gap: 6, marginTop: 5 }}>
+                  {group.points.map((point, index) => {
+                    const sequence = sequences[index];
+                    const travel = isTravelAppointment(point);
+                    return <div key={point.id} style={{ display: 'grid', gap: 2, padding: '6px 0', borderTop: index ? '1px solid #eef2f6' : '0' }}>
+                      <strong style={{ fontSize: 10 }}>{travel ? '🚗' : '📅'} Agenda {sequence} · {point.appointment_date ? dateFmt.format(new Date(`${point.appointment_date}T12:00:00`)) : 'Data não informada'}</strong>
+                      <small>{point.technician_name || 'Técnico não informado'}{point.service_reason ? ` · ${point.service_reason}` : ''}</small>
+                      {point.description && <small>{point.description}</small>}
+                    </div>;
+                  })}
+                </div>
+              </> : <>
+                <strong>{travelOnly ? `🚗 Deslocamento ${sequences[0]}` : `🧑‍🔧 Agenda ${sequences[0]}`} · {first.technician_name || 'Técnico agendado'}</strong>
+                <span>{first.appointment_date ? dateFmt.format(new Date(`${first.appointment_date}T12:00:00`)) : ''} · {first.service_city || first.city || 'Cidade não informada'}</span>
+                {!travelOnly && <small>{first.client_name || 'Cliente não informado'}</small>}
+                {travelOnly && <small>Deslocamento registrado na agenda.</small>}
+                {first.service_reason && <small>{first.service_reason}</small>}{first.equipment_serial && <small>{first.equipment_serial}</small>}
+              </>}
             </div></Popup>
           </Marker>;
         })}
@@ -915,6 +972,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       {!editMode && !routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · em Todos os técnicos, passe sobre uma rota para destacar a rota inteira daquele técnico; clique para fixar e clique no mapa para limpar. Clientes mantêm o mesmo tamanho; a cor representa somente a retenção.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · agendamentos repetidos da mesma máquina aparecem em um único pino com todas as datas; em Todos os técnicos, passe sobre uma rota para destacar a rota inteira daquele técnico.</div>
   </div>;
 }
