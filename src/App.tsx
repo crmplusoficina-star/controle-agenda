@@ -490,7 +490,7 @@ export default function App() {
     </div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />
     <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} onName={setTechName} onBranch={setTechBranch} onClose={() => setShowTechnician(false)} onSubmit={addTechnician} />
-    <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} />
+    <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} onCreateFollowup={(client) => { setClientDetail(null); void newFollowup(client); }} />
     <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} error={followupError} onClose={() => { setFollowupDraft(null); setFollowupError(''); }} onSubmit={saveFollowup} />
     <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
   </div>;
