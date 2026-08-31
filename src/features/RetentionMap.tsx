@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { CalendarPlus, Loader2, MapPinned, RefreshCw, Route } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -85,6 +85,21 @@ function visiblePosition(point: MapPoint): [number, number] {
   const distance = 0.0035 * ring;
   return [point.lat + Math.sin(angle) * distance, point.lng + Math.cos(angle) * distance];
 }
+
+function emojiMarkerIcon(emoji: string, kind: 'branch' | 'technician') {
+  const border = kind === 'technician' ? '#1d4ed8' : '#0f172a';
+  const background = kind === 'technician' ? '#dbeafe' : '#ffffff';
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1;background:${background};border:2px solid ${border};box-shadow:0 4px 10px rgba(15,23,42,.22);box-sizing:border-box">${emoji}</div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+    popupAnchor: [0, -18],
+  });
+}
+
+const branchMarkerIcon = emojiMarkerIcon('🏠', 'branch');
+const technicianMarkerIcon = emojiMarkerIcon('🧑‍🔧', 'technician');
 
 function FitMap({ points, route }: { points: MapPoint[]; route: MapResponse['route'] }) {
   const map = useMap();
@@ -229,7 +244,8 @@ export function RetentionMap({
 
     <div className="map-legend interactive">
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
-      <span><i className="tech-dot"/> agenda do técnico</span>
+      <span>🏠 base técnica</span>
+      <span>🧑‍🔧 agenda do técnico</span>
     </div>
 
     {error && <div className="map-message error">{error}</div>}
@@ -280,9 +296,8 @@ export function RetentionMap({
           const isToday = plan?.relative === 'today';
           const isTomorrow = plan?.relative === 'tomorrow';
           const label = plan?.label || (point.appointment_date ? relativeDayLabel(point.appointment_date) : 'AGENDA');
-          const markerColor = isToday ? '#1d4ed8' : isTomorrow ? '#3b82f6' : '#60a5fa';
-          return <CircleMarker key={point.id} center={[point.lat, point.lng]} radius={isToday ? 11 : 9.5} pathOptions={{ color: isToday ? '#0f172a' : '#1d4ed8', weight: isToday ? 4 : 3, fillColor: markerColor, fillOpacity: 0.96 }}>
-            <Tooltip permanent={selected} direction="top" offset={[0, -8]} className={`technician-tooltip ${isToday ? 'today' : isTomorrow ? 'tomorrow' : ''}`}>{selected ? label : `${label} · ${point.technician_name || 'Técnico'}`}</Tooltip>
+          return <Marker key={point.id} position={[point.lat, point.lng]} icon={technicianMarkerIcon}>
+            <Tooltip permanent={selected} direction="top" offset={[0, -18]} className={`technician-tooltip ${isToday ? 'today' : isTomorrow ? 'tomorrow' : ''}`}>{selected ? label : `${label} · ${point.technician_name || 'Técnico'}`}</Tooltip>
             <Popup minWidth={245}>
               <div className="map-popup-card technician-card">
                 <strong>{label} · {point.technician_name || 'Técnico agendado'}</strong>
@@ -293,10 +308,10 @@ export function RetentionMap({
                 {point.precision !== 'city' && point.location_label && <small>{point.location_label}</small>}
               </div>
             </Popup>
-          </CircleMarker>;
+          </Marker>;
         })}
 
-        {data.points.filter((point) => point.kind === 'branch').map((point) => <CircleMarker key={point.id} center={[point.lat, point.lng]} radius={9} pathOptions={{ color: '#0f172a', weight: 3, fillColor: '#fff', fillOpacity: 1 }}><Tooltip direction="top">{point.name || point.branch}</Tooltip><Popup><strong>{point.name || point.branch}</strong><br/><small>Origem provável da rota semanal</small></Popup></CircleMarker>)}
+        {data.points.filter((point) => point.kind === 'branch').map((point) => <Marker key={point.id} position={[point.lat, point.lng]} icon={branchMarkerIcon}><Tooltip direction="top" offset={[0, -18]}>{point.name || point.branch}</Tooltip><Popup><strong>{point.name || point.branch}</strong><br/><small>Base/origem da rota semanal</small></Popup></Marker>)}
       </MapContainer>
     </div>
 
