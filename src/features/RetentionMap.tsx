@@ -27,6 +27,17 @@ const TECHNICAL_BASES = [
   { name: 'Tracbel MANAUS', branch: 'MANAUS', lat: -3.1190, lng: -60.0217 },
 ] as const;
 
+const TECHNICIAN_MARKER_COLORS = [
+  { background: '#dbeafe', border: '#2563eb' },
+  { background: '#dcfce7', border: '#16a34a' },
+  { background: '#fef3c7', border: '#d97706' },
+  { background: '#f3e8ff', border: '#9333ea' },
+  { background: '#ffe4e6', border: '#e11d48' },
+  { background: '#cffafe', border: '#0891b2' },
+  { background: '#ffedd5', border: '#ea580c' },
+  { background: '#e0e7ff', border: '#4f46e5' },
+] as const;
+
 export type MapPoint = {
   id: string;
   kind: 'branch' | 'appointment' | 'client';
@@ -158,6 +169,16 @@ function hashText(value: string) {
   return Math.abs(hash);
 }
 
+function technicianMarkerStyle(technicianId?: string | null, technicianName?: string | null) {
+  const key = technicianId || technicianName || 'tecnico';
+  return TECHNICIAN_MARKER_COLORS[hashText(key) % TECHNICIAN_MARKER_COLORS.length];
+}
+
+function technicianInitial(name?: string | null) {
+  const trimmed = String(name || '').trim();
+  return trimmed ? trimmed.charAt(0).toUpperCase() : 'T';
+}
+
 function visiblePosition(point: MapPoint): [number, number] {
   if (point.precision !== 'city') return [point.lat, point.lng];
   const hash = hashText(point.client_key || point.id);
@@ -183,12 +204,18 @@ const branchMarkerIcon = L.divIcon({
   iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -18],
 });
 
-function agendaIcon(sequence: number, travel = false, badgeLabel?: string) {
+function agendaIcon(sequence: number, travel = false, count = 1, technicianId?: string | null, technicianName?: string | null) {
   const emoji = travel ? '🚗' : '🧑‍🔧';
-  const badge = badgeLabel || String(sequence);
+  const style = technicianMarkerStyle(technicianId, technicianName);
+  const initial = technicianInitial(technicianName);
+  const background = travel ? '#fef3c7' : style.background;
+  const border = travel ? '#d97706' : style.border;
+  const countBadge = count > 1
+    ? `<b style="position:absolute;right:-8px;bottom:-8px;min-width:19px;height:19px;padding:0 4px;border-radius:999px;background:#fff;color:#0f172a;border:2px solid ${border};font:800 10px/15px Arial;text-align:center;box-sizing:border-box">×${count}</b>`
+    : '';
   return L.divIcon({
     className: '',
-    html: `<div style="position:relative;width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;background:${travel ? '#fef3c7' : '#dbeafe'};border:3px solid ${travel ? '#d97706' : '#1d4ed8'};box-shadow:0 5px 14px rgba(15,23,42,.28);box-sizing:border-box">${emoji}<b style="position:absolute;right:-8px;top:-7px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#0f172a;color:white;border:2px solid white;font:800 10px/14px Arial;text-align:center;box-sizing:border-box">${badge}</b></div>`,
+    html: `<div style="position:relative;width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;background:${background};border:3px solid ${border};box-shadow:0 5px 14px rgba(15,23,42,.28);box-sizing:border-box">${emoji}<b style="position:absolute;right:-8px;top:-7px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#0f172a;color:white;border:2px solid white;font:800 10px/14px Arial;text-align:center;box-sizing:border-box">${sequence}</b><b style="position:absolute;left:-8px;bottom:-8px;width:19px;height:19px;border-radius:999px;background:${border};color:#fff;border:2px solid #fff;font:800 10px/15px Arial;text-align:center;box-sizing:border-box">${initial}</b>${countBadge}</div>`,
     iconSize: [40, 40], iconAnchor: [20, 20], popupAnchor: [0, -21],
   });
 }
@@ -929,11 +956,10 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const routeMuted = Boolean(focusedRouteTechnicianId && !routeFocused);
           const travelOnly = group.points.every((point) => isTravelAppointment(point));
           const multiple = group.points.length > 1;
-          const badge = multiple ? `×${group.points.length}` : String(sequences[0]);
           const tooltip = multiple
             ? `${group.points.length} agendamentos · ${first.client_name || 'Cliente'}${first.equipment_serial ? ` · ${first.equipment_serial}` : ''}`
             : `${travelOnly ? 'Deslocamento' : `Agenda ${sequences[0]}`} · ${first.technician_name || 'Técnico'}${first.service_city ? ` · ${first.service_city}` : ''}`;
-          return <Marker key={`agenda-group:${group.key}`} position={group.position} icon={agendaIcon(sequences[0], travelOnly, badge)} zIndexOffset={selected || routeFocused ? 1200 : 800} interactive={!editingClientKey && !editMode} opacity={editingClientKey || editMode ? 0.16 : routeMuted ? 0.18 : 1}>
+          return <Marker key={`agenda-group:${group.key}`} position={group.position} icon={agendaIcon(sequences[0], travelOnly, group.points.length, first.technician_id, first.technician_name)} zIndexOffset={selected || routeFocused ? 1200 : 800} interactive={!editingClientKey && !editMode} opacity={editingClientKey || editMode ? 0.16 : routeMuted ? 0.18 : 1}>
             <Tooltip permanent={selected && !editingClientKey && !editMode} direction="top" offset={[0, -21]} className="technician-tooltip">{multiple ? `${group.points.length} agendas · ${first.service_city || first.city || 'Destino'}` : selected && first.appointment_date ? `${sequences[0]}. ${relativeDayLabel(first.appointment_date)} · ${first.service_city || first.city || 'Destino'}` : tooltip}</Tooltip>
             <Popup minWidth={multiple ? 320 : 260}><div className="map-popup-card technician-card">
               {multiple ? <>
@@ -972,6 +998,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       {!editMode && !routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · agendamentos repetidos da mesma máquina aparecem em um único pino com todas as datas; em Todos os técnicos, passe sobre uma rota para destacar a rota inteira daquele técnico.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · o número superior é a ordem do atendimento, a quantidade fica abaixo e a inicial/cor identifica o técnico.</div>
   </div>;
 }
