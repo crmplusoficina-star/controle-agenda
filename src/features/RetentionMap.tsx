@@ -403,13 +403,12 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   useEffect(() => { void loadMap(); }, [loadMap]);
 
   const routeLabel = routeTechnicianId ? scheduledTechnicians.find((technician) => technician.id === routeTechnicianId)?.name || 'Técnico selecionado' : '';
-  const clientPoints = useMemo(() => data.points
-    .filter((point) => point.kind === 'client' && isBrazilPoint(point.lat, point.lng))
-    .map((point) => {
-      const official = point.client_key ? officialLocations.get(point.client_key) : undefined;
-      if (!official || !isBrazilPoint(official.lat, official.lng)) return point;
-      return { ...point, lat: official.lat, lng: official.lng, precision: 'official', location_source: 'manual_map_drag', location_label: 'Localização oficial' };
-    }), [data.points, officialLocations]);
+  const rawClientPoints = useMemo(() => data.points.filter((point) => point.kind === 'client' && isBrazilPoint(point.lat, point.lng)), [data.points]);
+  const clientPoints = useMemo(() => rawClientPoints.map((point) => {
+    const official = point.client_key ? officialLocations.get(point.client_key) : undefined;
+    if (!official || !isBrazilPoint(official.lat, official.lng)) return point;
+    return { ...point, lat: official.lat, lng: official.lng, precision: 'official', location_source: 'manual_map_drag', location_label: 'Localização oficial' };
+  }), [officialLocations, rawClientPoints]);
 
   const cityCenters = useMemo(() => {
     type Coordinates = { lat: number[]; lng: number[]; states: Set<string> };
@@ -422,7 +421,9 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       if (point.state) current.states.add(fold(point.state));
       map.set(key, current);
     };
-    for (const point of clientPoints) {
+    // Important: manually corrected coordinates belong only to that client. They
+    // must never change the inferred center of a city and move unrelated agendas.
+    for (const point of rawClientPoints) {
       const cityKey = fold(point.city);
       if (!cityKey) continue;
       add(cityGroups, cityKey, point);
@@ -433,7 +434,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     const byUniqueCity = new Map<string, [number, number]>();
     for (const [key, group] of cityGroups) if (group.states.size <= 1) byUniqueCity.set(key, [median(group.lat), median(group.lng)]);
     return { byBranchCity, byUniqueCity };
-  }, [clientPoints]);
+  }, [rawClientPoints]);
 
   const serverAppointmentById = useMemo(() => {
     const map = new Map<string, MapPoint>();
@@ -448,21 +449,28 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     const cityKey = fold(city);
     const technicianName = technicians.find((item) => item.id === appointment.technician_id)?.name || null;
     const serialMatches = clientKeysBySerial.get(serialKey(appointment.equipment_serial)) || [];
+
+    // A manual location is official for that client and has priority over any
+    // stale/mismatched city stored in G4. This prevents an appointment from being
+    // sent to another city after the user has placed the client on the map.
+    const officialSerialClientPoint = clientPoints.find((point) => point.location_source === 'manual_map_drag'
+      && Boolean(point.client_key && serialMatches.includes(point.client_key))
+      && fold(point.branch) === fold(appointment.branch));
+    const officialNameClientPoint = clientPoints.find((point) => point.location_source === 'manual_map_drag'
+      && fold(point.client_name) === fold(appointment.client_name)
+      && fold(point.branch) === fold(appointment.branch));
+
     const serialClientPoint = clientPoints.find((point) => {
       if (!point.client_key || !serialMatches.includes(point.client_key)) return false;
-      const client = clientByKey.get(point.client_key);
-      if (!client) return false;
-      return fold(client.branch) === fold(appointment.branch) && (!cityKey || fold(client.city) === cityKey);
+      return fold(point.branch) === fold(appointment.branch) && (!cityKey || fold(point.city) === cityKey);
     });
     const nameClientPoint = clientPoints.find((point) => {
       if (!point.client_key) return false;
-      const client = clientByKey.get(point.client_key);
-      if (!client) return false;
-      return fold(client.client_name) === fold(appointment.client_name)
-        && fold(client.branch) === fold(appointment.branch)
-        && (!cityKey || fold(client.city) === cityKey);
+      return fold(point.client_name) === fold(appointment.client_name)
+        && fold(point.branch) === fold(appointment.branch)
+        && (!cityKey || fold(point.city) === cityKey);
     });
-    const matchingClientPoint = serialClientPoint || nameClientPoint;
+    const matchingClientPoint = officialSerialClientPoint || officialNameClientPoint || serialClientPoint || nameClientPoint;
     const matchingClientPosition = matchingClientPoint ? visiblePosition(matchingClientPoint) : undefined;
     const branchCity = cityCenters.byBranchCity.get(`${fold(appointment.branch)}|${cityKey}`);
     const uniqueCity = cityCenters.byUniqueCity.get(cityKey);
@@ -481,7 +489,9 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     if (matchingClientPoint && matchingClientPosition) {
       position = matchingClientPosition;
       precision = matchingClientPoint.precision || 'city';
-      locationSource = serialClientPoint ? 'trusted-client-serial-position' : 'trusted-client-name-position';
+      locationSource = matchingClientPoint.location_source === 'manual_map_drag'
+        ? 'official-client-position'
+        : (serialClientPoint ? 'trusted-client-serial-position' : 'trusted-client-name-position');
       locationLabel = matchingClientPoint.location_label || null;
     } else if (serverValid && serverPoint) {
       position = [serverPoint.lat, serverPoint.lng];
@@ -507,7 +517,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       service_city: appointment.service_city, service_reason: appointment.service_reason, description: appointment.description,
       location_source: locationSource, location_label: locationLabel,
     }];
-  }), [cityCenters, clientByKey, clientKeysBySerial, clientPoints, serverAppointmentById, technicians, visibleAgenda]);
+  }), [cityCenters, clientKeysBySerial, clientPoints, serverAppointmentById, technicians, visibleAgenda]);
 
   const displayedAppointmentPositions = useMemo(() => {
     const map = new Map<string, [number, number]>();
