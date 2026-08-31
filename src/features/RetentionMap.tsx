@@ -14,6 +14,18 @@ const retentionKey = (clientName: string, branchName: string) => `${clientName.t
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 const shortDayFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
 
+const TECHNICAL_BASES = [
+  { name: 'Tracbel BALSAS', branch: 'BALSAS', lat: -7.5325, lng: -46.0356 },
+  { name: 'Tracbel IMPERATRIZ', branch: 'IMPERATRIZ', lat: -5.5264, lng: -47.4917 },
+  { name: 'Tracbel ITAITINGA', branch: 'ITAITINGA', lat: -3.9694, lng: -38.5288 },
+  { name: 'Tracbel SAO LUIS', branch: 'SAO LUIS', lat: -2.5307, lng: -44.3068 },
+  { name: 'Tracbel TERESINA', branch: 'TERESINA', lat: -5.0892, lng: -42.8019 },
+  { name: 'Tracbel MARITUBA', branch: 'MARITUBA', lat: -1.3550, lng: -48.3420 },
+  { name: 'Tracbel MARABA', branch: 'MARABA', lat: -5.3686, lng: -49.1178 },
+  { name: 'Tracbel MIRITITUBA', branch: 'MIRITITUBA', lat: -4.2760, lng: -55.9830 },
+  { name: 'Tracbel MANAUS', branch: 'MANAUS', lat: -3.1190, lng: -60.0217 },
+] as const;
+
 export type MapPoint = {
   id: string;
   kind: 'branch' | 'appointment' | 'client';
@@ -311,7 +323,7 @@ export function RetentionMap({
           </Marker>;
         })}
 
-        {data.points.filter((point) => point.kind === 'branch').map((point) => <Marker key={point.id} position={[point.lat, point.lng]} icon={branchMarkerIcon}><Tooltip direction="top" offset={[0, -18]}>{point.name || point.branch}</Tooltip><Popup><strong>{point.name || point.branch}</strong><br/><small>Base/origem da rota semanal</small></Popup></Marker>)}
+        {TECHNICAL_BASES.map((base) => <Marker key={`base:${base.branch}`} position={[base.lat, base.lng]} icon={branchMarkerIcon}><Tooltip direction="top" offset={[0, -18]}>{base.name}</Tooltip><Popup><strong>{base.name}</strong><br/><small>Base técnica</small></Popup></Marker>)}
       </MapContainer>
     </div>
 
