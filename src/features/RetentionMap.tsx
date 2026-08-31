@@ -317,6 +317,26 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
   const routeAppointmentPoints = useMemo(() => routeTechnicianId ? appointmentPoints.filter((point) => point.technician_id === routeTechnicianId) : [], [appointmentPoints, routeTechnicianId]);
 
+  const agendaRouteLines = useMemo(() => {
+    const groups = new Map<string, MapPoint[]>();
+    for (const point of appointmentPoints) {
+      if (!point.technician_id) continue;
+      const current = groups.get(point.technician_id) || [];
+      current.push(point);
+      groups.set(point.technician_id, current);
+    }
+    return Array.from(groups.entries()).flatMap(([technicianId, points]) => {
+      const technician = technicians.find((item) => item.id === technicianId);
+      const base = TECHNICAL_BASES.find((item) => technician && fold(item.branch) === fold(technician.branch));
+      const positions: [number, number][] = [
+        ...(base ? [[base.lat, base.lng] as [number, number]] : []),
+        ...points.map((point) => [point.lat, point.lng] as [number, number]),
+      ];
+      const unique = positions.filter((point, index) => index === 0 || haversineKm(positions[index - 1], point) > 0.15);
+      return unique.length >= 2 ? [{ technicianId, positions: unique }] : [];
+    });
+  }, [appointmentPoints, technicians]);
+
   useEffect(() => {
     const controller = new AbortController();
     setRoadRoute([]);
@@ -364,18 +384,23 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     <div className="map-legend interactive">
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
-      <span>🏠 base técnica</span><span>🧑‍🔧 agenda numerada</span><span>🚗 deslocamento</span><span>━ rota por rodovia</span>
+      <span>🏠 base técnica</span><span>🧑‍🔧 agenda numerada</span><span>🚗 deslocamento</span><span>┄ rota da agenda</span>
     </div>
 
     {error && <div className="map-message error">{error}</div>}
     {!error && data.points.length === 0 && loading && <div className="map-message"><Loader2 className="spin" size={18}/> Preparando mapa completo...</div>}
-    {routeTechnicianId && roadError && routeAppointmentPoints.length >= 2 && <div className="map-message error">A agenda está localizada, mas a rota rodoviária não respondeu. Nenhuma linha reta será inventada.</div>}
+    {routeTechnicianId && roadError && routeAppointmentPoints.length >= 2 && <div className="map-message error">A agenda está localizada e a sequência continua tracejada; a rota rodoviária não respondeu agora.</div>}
 
     <div className="retention-map">
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <FitMap points={fitPoints} route={roadRoute} />
-        {roadRoute.length >= 2 ? <Polyline positions={roadRoute} pathOptions={{ color: '#1d4ed8', weight: 6, opacity: 0.9 }} /> : null}
+
+        {agendaRouteLines.map((line) => {
+          if (routeTechnicianId && line.technicianId === routeTechnicianId && roadRoute.length >= 2) return null;
+          return <Polyline key={`agenda-route:${line.technicianId}`} positions={line.positions} pathOptions={{ color: '#1d4ed8', weight: 4, opacity: 0.75, dashArray: '8 10' }} />;
+        })}
+        {roadRoute.length >= 2 ? <Polyline positions={roadRoute} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.9, dashArray: '10 8' }} /> : null}
 
         {clientPoints.map((point) => {
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
@@ -419,10 +444,10 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     <div className="map-footer">
       <div><MapPinned size={15}/><span>{locatedClients.toLocaleString('pt-BR')} de {requestedClients.toLocaleString('pt-BR')} clientes no mapa</span></div>
-      {routeTechnicianId && <div><Route size={15}/><span>{routeLabel}: {routeAppointmentPoints.length} agenda{routeAppointmentPoints.length === 1 ? '' : 's'} na semana{roadStats ? ` · ${roadStats.distance_km} km · ${durationLabel(roadStats.duration_min)}` : routeAppointmentPoints.length >= 2 ? ' · calculando/aguardando rota rodoviária' : ' · aguardando próximo destino'}</span></div>}
-      {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para destacar a rota</span></div>}
+      {routeTechnicianId && <div><Route size={15}/><span>{routeLabel}: {routeAppointmentPoints.length} agenda{routeAppointmentPoints.length === 1 ? '' : 's'} na semana{roadStats ? ` · ${roadStats.distance_km} km · ${durationLabel(roadStats.duration_min)}` : routeAppointmentPoints.length >= 2 ? ' · sequência tracejada' : ' · aguardando próximo destino'}</span></div>}
+      {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · rotas tracejadas separadas por técnico</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. A agenda usa a posição validada do cliente/cidade e a linha azul segue a malha rodoviária.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. A rota tracejada liga a base e os atendimentos na ordem da agenda.</div>
   </div>;
 }
