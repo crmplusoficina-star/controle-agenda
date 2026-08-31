@@ -2,6 +2,7 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CalendarDays, Check, Filter,
 import { useMemo, useState } from 'react';
 import type { Followup } from '../types';
 import { EmptyState } from '../components/EmptyState';
+import { supabase } from '../lib/supabase';
 import './followup.css';
 
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -74,17 +75,22 @@ function columnValue(item: Followup, column: ColumnKey) {
 }
 
 function InlineValue({ item, onSave }: { item: Followup; onSave: (item: Followup, value: number | null) => Promise<void> }) {
-  const current = displayValue(item);
+  const initial = displayValue(item);
+  const [displayed, setDisplayed] = useState(initial);
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(current > 0 ? String(current).replace('.', ',') : '');
+  const [value, setValue] = useState(initial > 0 ? String(initial).replace('.', ',') : '');
   const [saving, setSaving] = useState(false);
   async function save() {
     const normalized = value.trim().replace(/\./g, '').replace(',', '.');
     const parsed = normalized ? Number(normalized) : null;
     if (normalized && !Number.isFinite(parsed)) return;
-    setSaving(true); await onSave(item, parsed); setSaving(false); setEditing(false);
+    setSaving(true);
+    await onSave(item, parsed);
+    setDisplayed(parsed || 0);
+    setSaving(false);
+    setEditing(false);
   }
-  if (!editing) return <button type="button" className="followup-inline-value" onClick={(e) => { e.stopPropagation(); setValue(current > 0 ? String(current).replace('.', ',') : ''); setEditing(true); }}>{current > 0 ? money.format(current) : <><Plus size={12}/> Informar</>}</button>;
+  if (!editing) return <button type="button" className="followup-inline-value" onClick={(e) => { e.stopPropagation(); setValue(displayed > 0 ? String(displayed).replace('.', ',') : ''); setEditing(true); }}>{displayed > 0 ? money.format(displayed) : <><Plus size={12}/> Informar</>}</button>;
   return <input className="followup-inline-value-input" autoFocus value={value} inputMode="decimal" disabled={saving} onClick={(e) => e.stopPropagation()} onChange={(e) => setValue(e.target.value)} onBlur={() => void save()} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void save(); } if (e.key === 'Escape') setEditing(false); }}/ >;
 }
 
@@ -112,7 +118,7 @@ function CalendarView({ rows, onEdit }: { rows: Followup[]; onEdit: (item: Follo
 }
 
 export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
-  rows: Followup[]; loading: boolean; onNew: () => void; onEdit: (item: Followup) => void; onQuickValue: (item: Followup, value: number | null) => Promise<void>;
+  rows: Followup[]; loading: boolean; onNew: () => void; onEdit: (item: Followup) => void; onQuickValue?: (item: Followup, value: number | null) => Promise<void>;
 }) {
   const [tab, setTab] = useState<FollowupTab>('active');
   const [search, setSearch] = useState('');
@@ -122,6 +128,10 @@ export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', note: '', owner: '', stage: '', next: '', result: '', value: '' });
   const [selectedFilters, setSelectedFilters] = useState<Record<ColumnKey, string[]>>({ client: [], note: [], owner: [], stage: [], next: [], result: [], value: [] });
 
+  const saveQuickValue = onQuickValue || (async (item: Followup, value: number | null) => {
+    const { error } = await supabase.from('followups').update({ estimated_value: value }).eq('id', item.id);
+    if (error) console.error('followup_quick_value_failed', error);
+  });
   const activeRows = useMemo(() => rows.filter((item) => item.stage !== 'encerrar'), [rows]);
   const historyRows = useMemo(() => rows.filter((item) => item.stage === 'encerrar' || Boolean(item.result)), [rows]);
   const sourceRows = tab === 'history' ? historyRows : activeRows;
@@ -175,7 +185,7 @@ export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
         <span className={`followup-stage stage-${item.stage}`}>{stageLabels[item.stage] || 'Prospectar'}</span>
         <strong>{item.next_followup_date ? dateFmt.format(new Date(`${item.next_followup_date}T12:00:00`)) : '—'}</strong>
         <span className={`followup-result result-${item.result || 'open'}`}>{resultText(item)}</span>
-        <InlineValue item={item} onSave={onQuickValue}/>
+        <InlineValue item={item} onSave={saveQuickValue}/>
       </button>)}
     </div>}
   </section>;
