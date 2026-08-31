@@ -25,7 +25,7 @@ const lostReasonLabels: Record<string, string> = {
 };
 const saleKindLabels: Record<string, string> = { pecas: 'Peças', servicos: 'Serviços', pecas_servicos: 'Peças + serviços' };
 
-type ColumnKey = 'client' | 'serial' | 'city' | 'last' | 'machines' | 'os' | 'treatment';
+type ColumnKey = 'client' | 'serial' | 'city' | 'branch' | 'last' | 'machines' | 'os' | 'treatment';
 type SortDirection = 'asc' | 'desc';
 
 type ClientCitySummary = {
@@ -126,7 +126,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
   const [sortKey, setSortKey] = useState<ColumnKey>('last');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', last: '', machines: '', os: '', treatment: '' });
+  const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', branch: '', last: '', machines: '', os: '', treatment: '' });
   const [treatments, setTreatments] = useState<Record<string, Followup>>({});
   const [citySummaries, setCitySummaries] = useState<Record<string, ClientCitySummary[]>>({});
 
@@ -251,12 +251,13 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       const clientSerials = serialsFor(client);
       const serialText = clientSerials.join(' ');
       const treatment = treatmentText(client);
-      const globalText = `${client.client_name} ${client.city || ''} ${citiesForSearch(original)} ${serialText} ${treatment}`.toLowerCase();
+      const globalText = `${client.client_name} ${client.city || ''} ${client.branch || ''} ${citiesForSearch(original)} ${serialText} ${treatment}`.toLowerCase();
       if (search && !globalText.includes(search.toLowerCase())) return [];
       if (futureClients.has(retentionKey(client.client_name, client.branch))) return [];
       const formattedDate = dateFmt.format(new Date(client.last_service_at));
       const matches = (!filters.client || client.client_name.toLowerCase().includes(filters.client.toLowerCase())) &&
         (!filters.serial || serialText.toLowerCase().includes(filters.serial.toLowerCase())) &&
+        (!filters.branch || (client.branch || '').toLowerCase().includes(filters.branch.toLowerCase())) &&
         (!filters.last || formattedDate.includes(filters.last)) &&
         (!filters.machines || String(client.machine_count).includes(filters.machines.trim())) &&
         (!filters.os || String(client.service_count).includes(filters.os.trim())) &&
@@ -270,6 +271,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
       if (sortKey === 'client') { av = a.client_name; bv = b.client_name; }
       if (sortKey === 'serial') { av = serialsFor(a).join(', '); bv = serialsFor(b).join(', '); }
       if (sortKey === 'city') { av = a.city || ''; bv = b.city || ''; }
+      if (sortKey === 'branch') { av = a.branch || ''; bv = b.branch || ''; }
       if (sortKey === 'last') { av = a.last_service_at ? new Date(a.last_service_at).getTime() : 0; bv = b.last_service_at ? new Date(b.last_service_at).getTime() : 0; }
       if (sortKey === 'machines') { av = a.machine_count; bv = b.machine_count; }
       if (sortKey === 'os') { av = a.service_count; bv = b.service_count; }
@@ -303,7 +305,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
 
   return <section className="list-page">
     <div className="list-toolbar">
-      <div className="search-box"><Search size={18}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente, série ou cidade" /></div>
+      <div className="search-box"><Search size={18}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar cliente, série, cidade ou filial" /></div>
       <div className="retention-toolbar-right">
         <div className="retention-view-switch" aria-label="Alternar visualização">
           <button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}><List size={14}/> Lista</button>
@@ -319,6 +321,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
         <ColumnHeader column="client" label="Cliente" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.client} setFilter={(value) => updateFilter('client', value)}/>
         <ColumnHeader column="serial" label="Série" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.serial} setFilter={(value) => updateFilter('serial', value)}/>
         <ColumnHeader column="city" label="Cidade" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.city} setFilter={(value) => updateFilter('city', value)}/>
+        <ColumnHeader column="branch" label="Filial" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.branch} setFilter={(value) => updateFilter('branch', value)}/>
         <ColumnHeader column="last" label="Último atendimento" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.last} setFilter={(value) => updateFilter('last', value)}/>
         <ColumnHeader column="machines" label="Máquinas" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.machines} setFilter={(value) => updateFilter('machines', value)} numeric/>
         <ColumnHeader column="os" label="OS" activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters.os} setFilter={(value) => updateFilter('os', value)} numeric/>
@@ -335,6 +338,7 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
           <div><div className="retention-client-line"><i className="retention-row-dot" style={{ background: recencyColor(client.last_service_at) }}/><strong>{client.client_name}</strong></div><small>{client.last_operation_type || 'Última operação não informada'}</small></div>
           <div className="series-cell" title={serialText}><strong>{serialText}</strong></div>
           <span>{client.city || '—'}</span>
+          <div className="branch-cell" title={client.branch || ''}><strong>{client.branch || '—'}</strong></div>
           <div><strong>{client.last_service_at ? dateFmt.format(new Date(client.last_service_at)) : '—'}</strong><small>{days ? `${Math.floor(days / 30)} meses atrás` : ''}</small></div>
           <strong>{client.machine_count}</strong>
           <strong>{client.service_count}</strong>
