@@ -13,6 +13,7 @@ const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-dig
 const shortDateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
 const retentionKey = (clientName: string, branchName: string) => `${clientName.trim().toUpperCase()}|${branchName.trim().toUpperCase()}`;
 const PAGE_SIZE = 1000;
+const RETENTION_SORT_STORAGE_KEY = 'agenda-tecnica:retention-sort-v1';
 
 const stageLabels: Record<string, string> = { prospectar: 'Prospectar', acompanhar: 'Acompanhar', encerrar: 'Encerrada' };
 const lostReasonLabels: Record<string, string> = {
@@ -27,6 +28,19 @@ const saleKindLabels: Record<string, string> = { pecas: 'Peças', servicos: 'Ser
 
 type ColumnKey = 'client' | 'serial' | 'city' | 'branch' | 'last' | 'machines' | 'os' | 'treatment';
 type SortDirection = 'asc' | 'desc';
+
+const columnKeys: ColumnKey[] = ['client', 'serial', 'city', 'branch', 'last', 'machines', 'os', 'treatment'];
+function storedSort(): { key: ColumnKey; direction: SortDirection } {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(RETENTION_SORT_STORAGE_KEY) || '{}') as { key?: string; direction?: string };
+    if (columnKeys.includes(saved.key as ColumnKey) && (saved.direction === 'asc' || saved.direction === 'desc')) {
+      return { key: saved.key as ColumnKey, direction: saved.direction };
+    }
+  } catch {
+    // usa o padrão quando o navegador não permite armazenamento local
+  }
+  return { key: 'last', direction: 'asc' };
+}
 
 type ClientCitySummary = {
   city_key: string;
@@ -134,15 +148,24 @@ export function RetentionView({ clients, loading, futureClients, serialsByClient
   onOpen: (client: ClientSummary) => void;
   onSchedule: (client: ClientSummary, serial: string, technicianId: string) => void;
 }) {
+  const initialSort = useMemo(storedSort, []);
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState<'list' | 'map'>('list');
   const [recencyFilter, setRecencyFilter] = useState<RecencyBucket | null>(null);
   const [activeColumn, setActiveColumn] = useState<ColumnKey | null>(null);
-  const [sortKey, setSortKey] = useState<ColumnKey>('last');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [sortKey, setSortKey] = useState<ColumnKey>(initialSort.key);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(initialSort.direction);
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', serial: '', city: '', branch: '', last: '', machines: '', os: '', treatment: '' });
   const [treatments, setTreatments] = useState<Record<string, Followup>>({});
   const [citySummaries, setCitySummaries] = useState<Record<string, ClientCitySummary[]>>({});
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RETENTION_SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, direction: sortDirection }));
+    } catch {
+      // a ordenação continua funcionando mesmo sem armazenamento local
+    }
+  }, [sortKey, sortDirection]);
 
   const clientBranchesKey = useMemo(() => Array.from(new Set(clients.map((client) => client.branch))).sort().join('|'), [clients]);
 
