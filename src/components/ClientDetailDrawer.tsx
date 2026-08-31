@@ -176,6 +176,7 @@ export function ClientDetailDrawer({ client, machines, history, loading, onClose
         {loading ? <div className="table-loading">Carregando máquinas...</div> : machines.length === 0 ? <div className="client-file-empty">Nenhuma série identificada.</div> : <div className="client-machine-list">
           {machines.map((machine) => <div className="client-machine-row" key={machine.serial}>
             <div><strong>{machine.serial}</strong><span>{machine.city || 'Cidade não informada'}</span></div>
+            <div style={{ minWidth: 0, flex: 1 }}><span>O que foi feito</span><strong style={{ whiteSpace: 'normal', lineHeight: 1.35 }}>{machine.last_description || 'Sem descrição registrada no G4'}</strong></div>
             <div><span>Último atendimento</span><strong>{formatDate(machine.last_service_at)}</strong></div>
             <div><span>OS</span><strong>{machine.service_count}</strong></div>
           </div>)}
@@ -187,7 +188,7 @@ export function ClientDetailDrawer({ client, machines, history, loading, onClose
         {loading ? <div className="table-loading">Carregando histórico...</div> : history.length === 0 ? <div className="client-file-empty">Nenhum atendimento encontrado.</div> : <div className="client-history-list">
           {history.map((item) => <div className="client-history-row" key={item.source_id}>
             <div className="client-history-top"><div><strong>{formatDate(item.service_date)}</strong><span>{item.operation_type || item.os_type || 'Atendimento'}</span></div><div className="client-history-os">{item.serial || 'Sem série'}{item.os_g4 ? ` · G4 ${item.os_g4}` : ''}</div></div>
-            {item.description && <p>{item.description}</p>}
+            <div style={{ marginTop: 8, padding: '9px 10px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0' }}><span style={{ display: 'block', marginBottom: 3, color: '#64748b', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>O que foi feito</span><p style={{ margin: 0 }}>{item.description || 'Sem descrição registrada no G4'}</p></div>
             <div className="client-history-meta"><span>{item.city || 'Cidade não informada'}</span>{item.status && <span>{item.status}</span>}</div>
           </div>)}
         </div>}
