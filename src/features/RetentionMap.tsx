@@ -182,9 +182,10 @@ function editableClientIcon(color: string) {
   });
 }
 
-function FitMap({ points, route }: { points: MapPoint[]; route: [number, number][] }) {
+function FitMap({ points, route, freeze = false }: { points: MapPoint[]; route: [number, number][]; freeze?: boolean }) {
   const map = useMap();
   useEffect(() => {
+    if (freeze) return;
     const coordinates: [number, number][] = route.length ? route : points.map((point) => point.kind === 'client' ? visiblePosition(point) : [point.lat, point.lng]);
     if (!coordinates.length) return;
     if (coordinates.length === 1) return void map.setView(coordinates[0], 11);
@@ -197,6 +198,7 @@ function MapEditLock({ active }: { active: boolean }) {
   const map = useMap();
   useEffect(() => {
     if (!active) return;
+    map.stop();
     map.dragging.disable();
     map.scrollWheelZoom.disable();
     map.doubleClickZoom.disable();
@@ -615,18 +617,19 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
   const editingClient = editingClientKey ? clientByKey.get(editingClientKey) : undefined;
+  const mapInteractionLocked = Boolean(holdingClientKey || editingClientKey);
 
   return <div className="retention-map-shell">
     <div className="map-toolbar">
       <div><strong>Mapa de retenção</strong><span>{weekLabel} · {requestedClients.toLocaleString('pt-BR')} clientes analisados</span></div>
       <div className="map-toolbar-actions">
         <CheckboxMultiSelect label="Técnico" items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))} selected={technicianIds} onChange={setTechnicianIds} allLabel="Todos os técnicos" compact />
-        <button type="button" className="subtle-button" onClick={() => void loadMap()} disabled={loading || Boolean(editingClientKey)}>{loading ? <Loader2 className="spin" size={15}/> : <RefreshCw size={15}/>} Atualizar</button>
+        <button type="button" className="subtle-button" onClick={() => void loadMap()} disabled={loading || mapInteractionLocked}>{loading ? <Loader2 className="spin" size={15}/> : <RefreshCw size={15}/>} Atualizar</button>
       </div>
     </div>
 
     <div className="map-legend interactive">
-      {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`} disabled={Boolean(editingClientKey)}><i style={{ background: item.color }}/>{item.label}</button>)}
+      {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`} disabled={mapInteractionLocked}><i style={{ background: item.color }}/>{item.label}</button>)}
       <span>🏠 base técnica</span><span>🧑‍🔧 agenda numerada</span><span>🚗 deslocamento</span><span>┄ rota por rodovia</span><span>📍 segure cliente por 5s para corrigir</span>
     </div>
 
@@ -635,12 +638,12 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     {routeTechnicianId && roadErrorIds.includes(routeTechnicianId) && routeAppointmentPoints.length >= 2 && <div className="map-message error">Os atendimentos estão localizados, mas a malha rodoviária não respondeu agora.</div>}
 
     <div className={`retention-map ${editingClientKey ? 'location-edit-active' : ''}`}>
-      {holdingClientKey && !editingClientKey && <div className="client-location-hold-banner"><span className="hold-progress"/>Mantenha pressionado por 5 segundos para liberar a edição.</div>}
-      {editingClient && <div className="client-location-edit-banner"><div><strong>📍 Ajustando localização oficial</strong><span>{editingClient.client_name} · arraste o pino e solte no ponto correto. Os demais itens estão bloqueados.</span></div><button type="button" onClick={() => { setEditingClientKey(null); setSavingLocation(false); }} disabled={savingLocation}><X size={14}/> Cancelar</button></div>}
+      {holdingClientKey && !editingClientKey && <div className="client-location-hold-banner"><span className="hold-progress"/>Mantenha pressionado por 5 segundos. O mapa e o zoom ficam travados durante a confirmação.</div>}
+      {editingClient && <div className="client-location-edit-banner"><div><strong>📍 Ajustando localização oficial</strong><span>{editingClient.client_name} · edição liberada. Solte o botão e arraste o pino para o ponto correto; ao soltar, salva para todos.</span></div><button type="button" onClick={() => { setEditingClientKey(null); setSavingLocation(false); }} disabled={savingLocation}><X size={14}/> Cancelar</button></div>}
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <MapEditLock active={Boolean(editingClientKey)} />
-        <FitMap points={fitPoints} route={fitRoute} />
+        <MapEditLock active={mapInteractionLocked} />
+        <FitMap points={fitPoints} route={fitRoute} freeze={mapInteractionLocked} />
         {roadRoutes.flatMap((route) => route.segments.length
           ? route.segments.map((segment) => <Polyline key={`road:${route.technicianId}:${segment.fromSequence}-${segment.toSequence}`} positions={segment.geometry} interactive={!editingClientKey} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 6 : 5, opacity: editingClientKey ? 0.16 : routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }}>
               <Tooltip sticky>Agenda {segment.fromSequence} → {segment.toSequence} · {segment.stats.distance_km.toLocaleString('pt-BR')} km · {durationLabel(segment.stats.duration_min)}</Tooltip>
@@ -667,14 +670,16 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
               position={center}
               icon={editableClientIcon(recencyColor(point.last_service_at))}
               draggable={!savingLocation}
+              autoPan={false}
               zIndexOffset={3000}
               eventHandlers={{
+                mousedown: (event) => L.DomEvent.stopPropagation(event.originalEvent),
                 dragend: (event) => {
                   const position = event.target.getLatLng();
                   void saveOfficialLocation(client, position.lat, position.lng);
                 },
               }}
-            ><Tooltip permanent direction="top" offset={[0, -18]} className="official-location-tooltip">{savingLocation ? 'Salvando localização oficial...' : 'Arraste e solte para salvar'}</Tooltip></Marker>;
+            ><Tooltip permanent direction="top" offset={[0, -18]} className="official-location-tooltip">{savingLocation ? 'Salvando localização oficial...' : 'Solte e arraste este pino'}</Tooltip></Marker>;
           }
           return <CircleMarker
             key={point.id}
@@ -683,11 +688,23 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
             interactive={!otherLocked}
             pathOptions={{ color: isHolding ? '#1d4ed8' : '#fff', weight: isHolding ? 4 : 1.5, fillColor: recencyColor(point.last_service_at), fillOpacity: otherLocked ? 0.16 : 0.9, opacity: otherLocked ? 0.16 : 1 }}
             eventHandlers={{
-              mousedown: () => startLongPress(point.client_key!),
-              mouseup: cancelLongPress,
+              mousedown: (event) => {
+                L.DomEvent.stopPropagation(event.originalEvent);
+                startLongPress(point.client_key!);
+              },
+              mouseup: (event) => {
+                L.DomEvent.stopPropagation(event.originalEvent);
+                cancelLongPress();
+              },
               mouseout: cancelLongPress,
-              touchstart: () => startLongPress(point.client_key!),
-              touchend: cancelLongPress,
+              touchstart: (event) => {
+                L.DomEvent.stopPropagation(event.originalEvent);
+                startLongPress(point.client_key!);
+              },
+              touchend: (event) => {
+                L.DomEvent.stopPropagation(event.originalEvent);
+                cancelLongPress();
+              },
               contextmenu: (event) => event.originalEvent.preventDefault(),
             }}
           >
@@ -734,6 +751,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       {!routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. Clique na rota para ver distância/tempo. Para corrigir um cliente, mantenha o pino pressionado por exatamente 5 segundos, arraste e solte; a nova posição passa a valer para todos.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. Clique na rota para ver distância/tempo. Para corrigir um cliente, mantenha o pino pressionado por exatamente 5 segundos; o zoom fica travado, depois solte, arraste e solte no ponto correto.</div>
   </div>;
 }
