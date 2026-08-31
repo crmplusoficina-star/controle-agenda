@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, CalendarDays, Check, Filter, History, ListTodo, Plus, Search, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Followup } from '../types';
 import { EmptyState } from '../components/EmptyState';
 import { supabase } from '../lib/supabase';
@@ -30,8 +30,19 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
   const active = activeColumn === column;
   const sorted = sortKey === column;
   const hasFilter = Boolean(filter || selected.length);
-  const visibleOptions = options.filter((option) => !filter || option.toLowerCase().includes(filter.toLowerCase())).slice(0, 80);
-  return <div className="followup-head-cell">
+  const visibleOptions = options.filter((option) => !filter || option.toLowerCase().includes(filter.toLowerCase())).slice(0, 120);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setActiveColumn(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    return () => document.removeEventListener('pointerdown', closeOnOutside);
+  }, [active, setActiveColumn]);
+
+  return <div className="followup-head-cell" ref={rootRef}>
     <button className={`followup-column-head ${hasFilter ? 'has-filter' : ''}`} type="button" onClick={() => setActiveColumn(active ? null : column)}>
       <span>{label}</span>{sorted ? (sortDirection === 'asc' ? <ArrowUp size={13}/> : <ArrowDown size={13}/>) : <Filter size={13}/>} {selected.length > 0 && <b>{selected.length}</b>}
     </button>
@@ -42,15 +53,19 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
         <button type="button" onClick={() => setSort(column, 'desc')}><ArrowDown size={14}/> {numeric ? 'Maior primeiro' : 'Z → A'}</button>
       </div>
       <label className="followup-column-filter"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={numeric ? 'Digite um valor' : 'Digite para filtrar'} inputMode={numeric ? 'decimal' : undefined}/></label>
+      <div className="followup-option-caption">Selecionar um ou mais</div>
       <div className="followup-option-list">
-        {visibleOptions.map((option) => {
+        {visibleOptions.length ? visibleOptions.map((option) => {
           const checked = selected.includes(option);
           return <button type="button" className={checked ? 'selected' : ''} key={option} onClick={() => setSelected(checked ? selected.filter((item) => item !== option) : [...selected, option])}>
             <span className="followup-option-check">{checked && <Check size={12}/>}</span><span>{option}</span>
           </button>;
-        })}
+        }) : <div className="followup-option-empty">Nenhuma opção encontrada</div>}
       </div>
-      {hasFilter && <button className="followup-clear-column-filter" type="button" onClick={() => { setFilter(''); setSelected([]); }}><X size={13}/> Limpar filtro</button>}
+      <div className="followup-filter-actions">
+        <button className="followup-clear-column-filter" type="button" onClick={() => { setFilter(''); setSelected([]); }}><X size={13}/> Limpar filtro</button>
+        <button className="followup-clear-column-filter" type="button" onClick={() => setActiveColumn(null)}><Check size={13}/> Confirmar</button>
+      </div>
     </div>}
   </div>;
 }
@@ -117,7 +132,7 @@ function CalendarView({ rows, onEdit }: { rows: Followup[]; onEdit: (item: Follo
   return <div className="followup-calendar-shell">
     <div className="followup-calendar-toolbar"><strong>{monthFmt.format(cursor)}</strong><div><button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}><ArrowLeft size={16}/></button><button onClick={() => setCursor(new Date())}>Hoje</button><button onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}><ArrowRight size={16}/></button></div></div>
     <div className="followup-calendar-weekdays">{['SEG','TER','QUA','QUI','SEX','SÁB','DOM'].map((day) => <span key={day}>{day}</span>)}</div>
-    <div className="followup-calendar-grid">{cells.map((day, index) => <div className={`followup-calendar-day ${day ? '' : 'empty'}`} key={index}>{day && <><b>{day}</b><div className="followup-calendar-items">{(byDay.get(day) || []).map((item) => <button type="button" key={item.id} onClick={() => onEdit(item)}><strong>{item.client_name}</strong><span>{item.notes || 'Entrar em contato'}</span><small>Consultor: {ownerText(item)}</small>{displayValue(item) > 0 && <small>Oportunidade: {money.format(displayValue(item))}</small>}</button>)}</div></>}</div>)}</div>
+    <div className="followup-calendar-grid">{cells.map((day, index) => <div className={`followup-calendar-day ${day ? '' : 'empty'}`} key={index}>{day && <><b>{day}</b><div className="followup-calendar-items">{(byDay.get(day) || []).map((item) => <button type="button" key={item.id} onClick={() => onEdit(item)}><strong>{item.client_name}</strong><span>{item.notes || 'Entrar em contato'}</span><em>Consultor: {ownerText(item)}</em>{displayValue(item) > 0 && <small>Oportunidade: {money.format(displayValue(item))}</small>}</button>)}</div></>}</div>)}</div>
   </div>;
 }
 
