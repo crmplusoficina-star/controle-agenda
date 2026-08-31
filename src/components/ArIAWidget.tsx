@@ -74,7 +74,12 @@ export function ArIAWidget() {
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!text.trim()) return;
+    const message = text.trim();
+    if (!message) return;
+    if (message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes('tutorial')) {
+      window.dispatchEvent(new Event('aria:tutorial:start'));
+      setOpen(false);
+    }
     setText('');
   }
 
@@ -114,7 +119,7 @@ export function ArIAWidget() {
       </header>
       <div className="aria-drag-hint"><GripHorizontal size={15}/> segure o topo e arraste</div>
       <div className="aria-body">
-        <div className="aria-message">Olá. Sou a <strong>ArIA</strong>. Este é o esboço da assistente; a configuração e as instruções do Groq serão adicionadas depois.</div>
+        <div className="aria-message">Olá. Sou a <strong>ArIA</strong>. Se quiser rever as funções do sistema, escreva <strong>“Gostaria de ver o tutorial”</strong>.</div>
       </div>
       <form className="aria-input" onSubmit={submit}>
         <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Digite uma mensagem para ArIA..." />
