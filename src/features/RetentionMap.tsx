@@ -204,7 +204,11 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     setTechnicianIds((current) => current.filter((id) => available.has(id)));
   }, [scheduledTechnicians]);
 
-  const routeTechnicianId = technicianIds.length === 1 ? technicianIds[0] : '';
+  const routeTechnicianId = technicianIds.length === 1
+    ? technicianIds[0]
+    : technicianIds.length === 0 && scheduledTechnicians.length === 1
+      ? scheduledTechnicians[0].id
+      : '';
   const clientByKey = useMemo(() => new Map(clients.map((client) => [client.client_key, client])), [clients]);
   const clientKeysBySerial = useMemo(() => {
     const map = new Map<string, string[]>();
