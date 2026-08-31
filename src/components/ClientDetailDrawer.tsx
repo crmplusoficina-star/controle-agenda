@@ -1,4 +1,4 @@
-import { Building2, CalendarDays, MapPin, MessageSquareText, Wrench } from 'lucide-react';
+import { Building2, CalendarDays, MapPin, MessageSquarePlus, MessageSquareText, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
@@ -53,12 +53,13 @@ function updateLabel(item: FollowupUpdate) {
   return stageLabels[item.stage] || 'Atualização';
 }
 
-export function ClientDetailDrawer({ client, machines, history, loading, onClose }: {
+export function ClientDetailDrawer({ client, machines, history, loading, onClose, onCreateFollowup }: {
   client: ClientSummary | null;
   machines: MachineSummary[];
   history: HistoryRow[];
   loading: boolean;
   onClose: () => void;
+  onCreateFollowup: (client: ClientSummary) => void;
 }) {
   const [followups, setFollowups] = useState<Followup[]>([]);
   const [followupUpdates, setFollowupUpdates] = useState<FollowupUpdate[]>([]);
@@ -126,7 +127,7 @@ export function ClientDetailDrawer({ client, machines, history, loading, onClose
 
   if (!client) return null;
 
-  return <Drawer open title={client.client_name} subtitle={`${client.branch}${client.city ? ` · ${client.city}` : ''}`} onClose={onClose} wide>
+  return <Drawer open title={client.client_name} subtitle={`${client.branch}${client.city ? ` · ${client.city}` : ''}`} onClose={onClose} wide belowTopbar headerAction={<button type="button" className="primary-button client-create-treatment" onClick={() => onCreateFollowup(client)}><MessageSquarePlus size={15}/> Criar tratativa</button>}>
     <div className="client-file">
       <div className="client-file-summary">
         <div><Building2 size={17}/><span>Filial</span><strong>{client.branch}</strong></div>
