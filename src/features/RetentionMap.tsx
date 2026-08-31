@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { CalendarPlus, Loader2, MapPinned, RefreshCw, Route, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -217,6 +217,11 @@ function MapEditLock({ active }: { active: boolean }) {
   return null;
 }
 
+function MapRouteFocusClear({ onClear }: { onClear: () => void }) {
+  useMapEvents({ click: onClear });
+  return null;
+}
+
 function durationLabel(minutes?: number) {
   if (minutes == null) return '';
   const hours = Math.floor(minutes / 60);
@@ -251,6 +256,8 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   const [holdingClientKey, setHoldingClientKey] = useState<string | null>(null);
   const [editingClientKey, setEditingClientKey] = useState<string | null>(null);
   const [savingLocation, setSavingLocation] = useState(false);
+  const [hoveredRouteTechnicianId, setHoveredRouteTechnicianId] = useState<string | null>(null);
+  const [pinnedRouteTechnicianId, setPinnedRouteTechnicianId] = useState<string | null>(null);
   const holdTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -421,8 +428,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       if (point.state) current.states.add(fold(point.state));
       map.set(key, current);
     };
-    // Important: manually corrected coordinates belong only to that client. They
-    // must never change the inferred center of a city and move unrelated agendas.
     for (const point of rawClientPoints) {
       const cityKey = fold(point.city);
       if (!cityKey) continue;
@@ -449,17 +454,12 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     const cityKey = fold(city);
     const technicianName = technicians.find((item) => item.id === appointment.technician_id)?.name || null;
     const serialMatches = clientKeysBySerial.get(serialKey(appointment.equipment_serial)) || [];
-
-    // A manual location is official for that client and has priority over any
-    // stale/mismatched city stored in G4. This prevents an appointment from being
-    // sent to another city after the user has placed the client on the map.
     const officialSerialClientPoint = clientPoints.find((point) => point.location_source === 'manual_map_drag'
       && Boolean(point.client_key && serialMatches.includes(point.client_key))
       && fold(point.branch) === fold(appointment.branch));
     const officialNameClientPoint = clientPoints.find((point) => point.location_source === 'manual_map_drag'
       && fold(point.client_name) === fold(appointment.client_name)
       && fold(point.branch) === fold(appointment.branch));
-
     const serialClientPoint = clientPoints.find((point) => {
       if (!point.client_key || !serialMatches.includes(point.client_key)) return false;
       return fold(point.branch) === fold(appointment.branch) && (!cityKey || fold(point.city) === cityKey);
@@ -475,7 +475,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     const branchCity = cityCenters.byBranchCity.get(`${fold(appointment.branch)}|${cityKey}`);
     const uniqueCity = cityCenters.byUniqueCity.get(cityKey);
     const trustedCenter: [number, number] | undefined = matchingClientPosition || branchCity || uniqueCity;
-
     const serverPoint = serverAppointmentById.get(appointment.id);
     const serverValid = Boolean(serverPoint
       && isBrazilPoint(serverPoint.lat, serverPoint.lng)
@@ -485,7 +484,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     let precision = 'city';
     let locationSource = '';
     let locationLabel: string | null = null;
-
     if (matchingClientPoint && matchingClientPosition) {
       position = matchingClientPosition;
       precision = matchingClientPoint.precision || 'city';
@@ -508,7 +506,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
         locationSource = 'technical-base-city';
       }
     }
-
     if (!position) return [];
     return [{
       id: `appointment:${appointment.id}`, kind: 'appointment' as const, lat: position[0], lng: position[1], precision,
@@ -542,13 +539,9 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     const controller = new AbortController();
     setRoadRoutes([]);
     setRoadErrorIds([]);
-
     const candidates = routeGroups.filter((group) => group.points.length >= 2 && (!technicianIds.length || technicianIds.includes(group.technicianId)));
     if (!candidates.length) return () => controller.abort();
-
-    const serverFallback = data.route && !data.route.approximate && !data.route.routing_error && data.route.geometry?.length >= 2
-      ? data.route
-      : null;
+    const serverFallback = data.route && !data.route.approximate && !data.route.routing_error && data.route.geometry?.length >= 2 ? data.route : null;
 
     void Promise.all(candidates.map(async (group) => {
       const stopItems: { point: MapPoint; position: [number, number] }[] = [];
@@ -557,7 +550,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
         if (!stopItems.length || haversineKm(stopItems[stopItems.length - 1].position, position) > 0.005) stopItems.push({ point, position });
       }
       if (stopItems.length < 2) return null;
-
       const coords = stopItems.map(({ position: [lat, lng] }) => `${lng},${lat}`).join(';');
       try {
         const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`, { signal: controller.signal });
@@ -567,7 +559,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
         const geometry = best?.geometry?.coordinates;
         const legs = best?.legs;
         if (!Array.isArray(geometry) || geometry.length < 2 || !Array.isArray(legs)) throw new Error('routing_failed');
-
         const segments: RoadSegment[] = legs.flatMap((leg: any, index: number) => {
           const stepCoordinates = Array.isArray(leg?.steps)
             ? leg.steps.flatMap((step: any) => Array.isArray(step?.geometry?.coordinates) ? step.geometry.coordinates : [])
@@ -589,7 +580,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
             },
           }];
         });
-
         return {
           technicianId: group.technicianId,
           geometry: geometry.map((item: number[]) => [Number(item[1]), Number(item[0])] as [number, number]),
@@ -615,25 +605,32 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       if (controller.signal.aborted) return;
       setRoadRoutes(routes.filter((route): route is RoadRoute => Boolean(route)));
     });
-
     return () => controller.abort();
   }, [data.route, displayedAppointmentPositions, routeGroups, sequenceByAppointment, technicianIds]);
 
   const selectedRoadRoute = routeTechnicianId ? roadRoutes.find((route) => route.technicianId === routeTechnicianId) : undefined;
-  const fitRoute = routeTechnicianId
-    ? selectedRoadRoute?.geometry || []
-    : roadRoutes.flatMap((route) => route.geometry);
+  const fitRoute = routeTechnicianId ? selectedRoadRoute?.geometry || [] : roadRoutes.flatMap((route) => route.geometry);
   const fitPoints = useMemo(() => routeTechnicianId ? routeAppointmentPoints : [...data.points.filter((point) => point.kind !== 'appointment' && (point.kind !== 'client' || isBrazilPoint(point.lat, point.lng))), ...appointmentPoints], [appointmentPoints, data.points, routeAppointmentPoints, routeTechnicianId]);
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
   const editingClient = editingClientKey ? clientByKey.get(editingClientKey) : undefined;
   const mapInteractionLocked = Boolean(holdingClientKey || editingClientKey);
+  const focusedRouteTechnicianId = routeTechnicianId || pinnedRouteTechnicianId || hoveredRouteTechnicianId || '';
+  const focusedRouteName = focusedRouteTechnicianId ? technicians.find((item) => item.id === focusedRouteTechnicianId)?.name || 'Técnico' : '';
+  const routeAppearance = (technicianId: string) => {
+    const focused = focusedRouteTechnicianId === technicianId;
+    const muted = Boolean(focusedRouteTechnicianId && !focused);
+    if (editingClientKey) return { color: '#64748b', weight: 2, opacity: 0.08 };
+    if (focused) return { color: '#1d4ed8', weight: 7, opacity: 1 };
+    if (muted) return { color: '#64748b', weight: 2, opacity: 0.07 };
+    return { color: '#64748b', weight: 3, opacity: 0.28 };
+  };
 
   return <div className="retention-map-shell">
     <div className="map-toolbar">
       <div><strong>Mapa de retenção</strong><span>{weekLabel} · {requestedClients.toLocaleString('pt-BR')} clientes analisados</span></div>
       <div className="map-toolbar-actions">
-        <CheckboxMultiSelect label="Técnico" items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))} selected={technicianIds} onChange={setTechnicianIds} allLabel="Todos os técnicos" compact />
+        <CheckboxMultiSelect label="Técnico" items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))} selected={technicianIds} onChange={(next) => { setTechnicianIds(next); setHoveredRouteTechnicianId(null); setPinnedRouteTechnicianId(null); }} allLabel="Todos os técnicos" compact />
         <button type="button" className="subtle-button" onClick={() => void loadMap()} disabled={loading || mapInteractionLocked}>{loading ? <Loader2 className="spin" size={15}/> : <RefreshCw size={15}/>} Atualizar</button>
       </div>
     </div>
@@ -648,23 +645,37 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     {routeTechnicianId && roadErrorIds.includes(routeTechnicianId) && routeAppointmentPoints.length >= 2 && <div className="map-message error">Os atendimentos estão localizados, mas a malha rodoviária não respondeu agora.</div>}
 
     <div className={`retention-map ${editingClientKey ? 'location-edit-active' : ''}`}>
+      {!routeTechnicianId && focusedRouteTechnicianId && !editingClientKey && <div className="route-focus-banner"><strong>🧑‍🔧 {focusedRouteName}</strong><span>{pinnedRouteTechnicianId === focusedRouteTechnicianId ? 'Rota fixada · clique no mapa para limpar' : 'Rota em destaque'}</span></div>}
       {holdingClientKey && !editingClientKey && <div className="client-location-hold-banner"><span className="hold-progress"/>Mantenha pressionado por 5 segundos. O mapa e o zoom ficam travados durante a confirmação.</div>}
       {editingClient && <div className="client-location-edit-banner"><div><strong>📍 Ajustando localização oficial</strong><span>{editingClient.client_name} · edição liberada. Solte o botão e arraste o pino para o ponto correto; ao soltar, salva para todos.</span></div><button type="button" onClick={() => { setEditingClientKey(null); setSavingLocation(false); }} disabled={savingLocation}><X size={14}/> Cancelar</button></div>}
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <MapEditLock active={mapInteractionLocked} />
+        <MapRouteFocusClear onClear={() => { if (pinnedRouteTechnicianId) setPinnedRouteTechnicianId(null); }} />
         <FitMap points={fitPoints} route={fitRoute} freeze={mapInteractionLocked} />
-        {roadRoutes.flatMap((route) => route.segments.length
-          ? route.segments.map((segment) => <Polyline key={`road:${route.technicianId}:${segment.fromSequence}-${segment.toSequence}`} positions={segment.geometry} interactive={!editingClientKey} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 6 : 5, opacity: editingClientKey ? 0.16 : routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }}>
-              <Tooltip sticky>Agenda {segment.fromSequence} → {segment.toSequence} · {segment.stats.distance_km.toLocaleString('pt-BR')} km · {durationLabel(segment.stats.duration_min)}</Tooltip>
-              <Popup minWidth={245}><div className="map-popup-card technician-card">
-                <strong>🚙 Agenda {segment.fromSequence} → Agenda {segment.toSequence}</strong>
-                <span>{segment.fromLabel} → {segment.toLabel}</span>
-                <small>Distância pela malha viária: {segment.stats.distance_km.toLocaleString('pt-BR')} km</small>
-                <small>Tempo estimado de deslocamento: {durationLabel(segment.stats.duration_min)}</small>
-              </div></Popup>
-            </Polyline>)
-          : [<Polyline key={`road:${route.technicianId}:full`} positions={route.geometry} interactive={!editingClientKey} pathOptions={{ color: '#1d4ed8', weight: routeTechnicianId === route.technicianId ? 5 : 4, opacity: editingClientKey ? 0.16 : routeTechnicianId && routeTechnicianId !== route.technicianId ? 0.35 : 0.9, dashArray: '10 8' }} />])}
+        {roadRoutes.flatMap((route) => {
+          const appearance = routeAppearance(route.technicianId);
+          const technicianName = technicians.find((item) => item.id === route.technicianId)?.name || 'Técnico';
+          const handlers = {
+            mouseover: () => setHoveredRouteTechnicianId(route.technicianId),
+            mouseout: () => setHoveredRouteTechnicianId((current) => current === route.technicianId ? null : current),
+            click: (event: any) => {
+              L.DomEvent.stopPropagation(event.originalEvent);
+              setPinnedRouteTechnicianId((current) => current === route.technicianId ? null : route.technicianId);
+            },
+          };
+          return route.segments.length
+            ? route.segments.map((segment) => <Polyline key={`road:${route.technicianId}:${segment.fromSequence}-${segment.toSequence}`} positions={segment.geometry} interactive={!editingClientKey} eventHandlers={handlers} pathOptions={{ ...appearance, dashArray: '10 8' }}>
+                <Tooltip sticky><strong>{technicianName}</strong> · Agenda {segment.fromSequence} → {segment.toSequence} · {segment.stats.distance_km.toLocaleString('pt-BR')} km · {durationLabel(segment.stats.duration_min)}</Tooltip>
+                <Popup minWidth={245}><div className="map-popup-card technician-card">
+                  <strong>🚙 {technicianName} · Agenda {segment.fromSequence} → Agenda {segment.toSequence}</strong>
+                  <span>{segment.fromLabel} → {segment.toLabel}</span>
+                  <small>Distância pela malha viária: {segment.stats.distance_km.toLocaleString('pt-BR')} km</small>
+                  <small>Tempo estimado de deslocamento: {durationLabel(segment.stats.duration_min)}</small>
+                </div></Popup>
+              </Polyline>)
+            : [<Polyline key={`road:${route.technicianId}:full`} positions={route.geometry} interactive={!editingClientKey} eventHandlers={handlers} pathOptions={{ ...appearance, dashArray: '10 8' }}><Tooltip sticky><strong>{technicianName}</strong> · rota da semana</Tooltip></Polyline>];
+        })}
 
         {clientPoints.map((point) => {
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
@@ -675,49 +686,19 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const isHolding = holdingClientKey === point.client_key;
           const center = visiblePosition(point);
           if (isEditing) {
-            return <Marker
-              key={`edit:${point.id}`}
-              position={center}
-              icon={editableClientIcon(recencyColor(point.last_service_at))}
-              draggable={!savingLocation}
-              autoPan={false}
-              zIndexOffset={3000}
-              eventHandlers={{
-                mousedown: (event) => L.DomEvent.stopPropagation(event.originalEvent),
-                dragend: (event) => {
-                  const position = event.target.getLatLng();
-                  void saveOfficialLocation(client, position.lat, position.lng);
-                },
-              }}
-            ><Tooltip permanent direction="top" offset={[0, -18]} className="official-location-tooltip">{savingLocation ? 'Salvando localização oficial...' : 'Solte e arraste este pino'}</Tooltip></Marker>;
+            return <Marker key={`edit:${point.id}`} position={center} icon={editableClientIcon(recencyColor(point.last_service_at))} draggable={!savingLocation} autoPan={false} zIndexOffset={3000} eventHandlers={{
+              mousedown: (event) => L.DomEvent.stopPropagation(event.originalEvent),
+              dragend: (event) => { const position = event.target.getLatLng(); void saveOfficialLocation(client, position.lat, position.lng); },
+            }}><Tooltip permanent direction="top" offset={[0, -18]} className="official-location-tooltip">{savingLocation ? 'Salvando localização oficial...' : 'Solte e arraste este pino'}</Tooltip></Marker>;
           }
-          return <CircleMarker
-            key={point.id}
-            center={center}
-            radius={isHolding ? 9 : 6}
-            interactive={!otherLocked}
-            pathOptions={{ color: isHolding ? '#1d4ed8' : '#fff', weight: isHolding ? 4 : 1.5, fillColor: recencyColor(point.last_service_at), fillOpacity: otherLocked ? 0.16 : 0.9, opacity: otherLocked ? 0.16 : 1 }}
-            eventHandlers={{
-              mousedown: (event) => {
-                L.DomEvent.stopPropagation(event.originalEvent);
-                startLongPress(point.client_key!);
-              },
-              mouseup: (event) => {
-                L.DomEvent.stopPropagation(event.originalEvent);
-                cancelLongPress();
-              },
-              mouseout: cancelLongPress,
-              touchstart: (event) => {
-                L.DomEvent.stopPropagation(event.originalEvent);
-                startLongPress(point.client_key!);
-              },
-              touchend: (event) => {
-                L.DomEvent.stopPropagation(event.originalEvent);
-                cancelLongPress();
-              },
-              contextmenu: (event) => event.originalEvent.preventDefault(),
-            }}
-          >
+          return <CircleMarker key={point.id} center={center} radius={isHolding ? 9 : 6} interactive={!otherLocked} pathOptions={{ color: isHolding ? '#1d4ed8' : '#fff', weight: isHolding ? 4 : 1.5, fillColor: recencyColor(point.last_service_at), fillOpacity: otherLocked ? 0.16 : 0.9, opacity: otherLocked ? 0.16 : 1 }} eventHandlers={{
+            mousedown: (event) => { L.DomEvent.stopPropagation(event.originalEvent); startLongPress(point.client_key!); },
+            mouseup: (event) => { L.DomEvent.stopPropagation(event.originalEvent); cancelLongPress(); },
+            mouseout: cancelLongPress,
+            touchstart: (event) => { L.DomEvent.stopPropagation(event.originalEvent); startLongPress(point.client_key!); },
+            touchend: (event) => { L.DomEvent.stopPropagation(event.originalEvent); cancelLongPress(); },
+            contextmenu: (event) => event.originalEvent.preventDefault(),
+          }}>
             <Tooltip direction="top" offset={[0, -5]}>{client.client_name}</Tooltip>
             <Popup minWidth={250}><div className="map-popup-card">
               <strong>{client.client_name}</strong><span>{client.city || 'Cidade não informada'} · {serials.length} máquina{serials.length === 1 ? '' : 's'}</span>
@@ -736,10 +717,12 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const appointmentId = point.id.replace('appointment:', '');
           const sequence = sequenceByAppointment.get(appointmentId) || index + 1;
           const selected = Boolean(routeTechnicianId && point.technician_id === routeTechnicianId);
+          const routeFocused = Boolean(focusedRouteTechnicianId && point.technician_id === focusedRouteTechnicianId);
+          const routeMuted = Boolean(focusedRouteTechnicianId && !routeFocused);
           const travel = isTravelAppointment(point);
           const dayLabel = point.appointment_date ? relativeDayLabel(point.appointment_date) : 'AGENDA';
           const tooltip = `${travel ? 'Deslocamento' : `Agenda ${sequence}`} · ${point.technician_name || 'Técnico'}${point.service_city ? ` · ${point.service_city}` : ''}`;
-          return <Marker key={point.id} position={displayedAppointmentPositions.get(point.id) || [point.lat, point.lng]} icon={agendaIcon(sequence, travel)} zIndexOffset={selected ? 1200 : 800} interactive={!editingClientKey} opacity={editingClientKey ? 0.2 : 1}>
+          return <Marker key={point.id} position={displayedAppointmentPositions.get(point.id) || [point.lat, point.lng]} icon={agendaIcon(sequence, travel)} zIndexOffset={selected || routeFocused ? 1200 : 800} interactive={!editingClientKey} opacity={editingClientKey ? 0.2 : routeMuted ? 0.18 : 1}>
             <Tooltip permanent={selected && !editingClientKey} direction="top" offset={[0, -21]} className="technician-tooltip">{selected ? `${sequence}. ${dayLabel} · ${point.service_city || point.city || 'Destino'}` : tooltip}</Tooltip>
             <Popup minWidth={260}><div className="map-popup-card technician-card">
               <strong>{travel ? `🚗 Deslocamento ${sequence}` : `🧑‍🔧 Agenda ${sequence}`} · {point.technician_name || 'Técnico agendado'}</strong>
@@ -761,6 +744,6 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       {!routeTechnicianId && roadRoutes.length > 0 && <div><Route size={15}/><span>{roadRoutes.length} rota{roadRoutes.length === 1 ? '' : 's'} de técnico exibida{roadRoutes.length === 1 ? '' : 's'} pela malha viária</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · clientes mantêm o mesmo tamanho; a cor representa somente a retenção. Clique na rota para ver distância/tempo. Para corrigir um cliente, mantenha o pino pressionado por exatamente 5 segundos; o zoom fica travado, depois solte, arraste e solte no ponto correto.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · em Todos os técnicos, passe sobre uma rota para destacar a rota inteira daquele técnico; clique para fixar e clique no mapa para limpar. Clientes mantêm o mesmo tamanho; a cor representa somente a retenção.</div>
   </div>;
 }
