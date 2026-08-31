@@ -57,10 +57,14 @@ type MapResponse = {
   route: {
     technician_id: string;
     approximate: boolean;
+    routing_error?: boolean;
     origin_label: string;
     geometry: [number, number][];
+    distance_km?: number;
+    duration_min?: number;
     nearby_clients?: number;
     radius_km?: number;
+    legs?: { index: number; distance_km: number; duration_min: number }[];
   } | null;
   unresolved: number;
   geocoded_now: number;
@@ -69,10 +73,7 @@ type MapResponse = {
 };
 
 function localIso(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function relativeDayLabel(dateValue: string) {
@@ -81,8 +82,7 @@ function relativeDayLabel(dateValue: string) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   if (dateValue === localIso(today)) return 'HOJE';
   if (dateValue === localIso(tomorrow)) return 'AMANHÃ';
-  const date = new Date(`${dateValue}T12:00:00`);
-  return shortDayFmt.format(date).replace('.', '').toUpperCase();
+  return shortDayFmt.format(new Date(`${dateValue}T12:00:00`)).replace('.', '').toUpperCase();
 }
 
 function fold(value?: string | null) {
@@ -119,43 +119,37 @@ function agendaVisiblePosition(points: MapPoint[], index: number): [number, numb
   return [point.lat + Math.sin(angle) * radius, point.lng + Math.cos(angle) * radius];
 }
 
-function baseIcon() {
-  return L.divIcon({
-    className: '',
-    html: '<div style="width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:18px;background:#fff;border:2px solid #0f172a;box-shadow:0 4px 10px rgba(15,23,42,.22);box-sizing:border-box">🏠</div>',
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    popupAnchor: [0, -18],
-  });
-}
+const branchMarkerIcon = L.divIcon({
+  className: '',
+  html: '<div style="width:34px;height:34px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:18px;background:#fff;border:2px solid #0f172a;box-shadow:0 4px 10px rgba(15,23,42,.22);box-sizing:border-box">🏠</div>',
+  iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -18],
+});
 
 function agendaIcon(sequence: number, travel = false) {
   const emoji = travel ? '🚗' : '🧑‍🔧';
   return L.divIcon({
     className: '',
     html: `<div style="position:relative;width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:19px;background:${travel ? '#fef3c7' : '#dbeafe'};border:3px solid ${travel ? '#d97706' : '#1d4ed8'};box-shadow:0 5px 14px rgba(15,23,42,.28);box-sizing:border-box">${emoji}<b style="position:absolute;right:-6px;top:-7px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#0f172a;color:white;border:2px solid white;font:800 10px/14px Arial;text-align:center;box-sizing:border-box">${sequence}</b></div>`,
-    iconSize: [40, 40],
-    iconAnchor: [20, 20],
-    popupAnchor: [0, -21],
+    iconSize: [40, 40], iconAnchor: [20, 20], popupAnchor: [0, -21],
   });
 }
-
-const branchMarkerIcon = baseIcon();
 
 function FitMap({ points, route }: { points: MapPoint[]; route: [number, number][] }) {
   const map = useMap();
   useEffect(() => {
-    const coordinates: [number, number][] = route.length
-      ? route
-      : points.map((point) => point.kind === 'client' ? visiblePosition(point) : [point.lat, point.lng]);
+    const coordinates: [number, number][] = route.length ? route : points.map((point) => point.kind === 'client' ? visiblePosition(point) : [point.lat, point.lng]);
     if (!coordinates.length) return;
-    if (coordinates.length === 1) {
-      map.setView(coordinates[0], 11);
-      return;
-    }
+    if (coordinates.length === 1) return void map.setView(coordinates[0], 11);
     map.fitBounds(L.latLngBounds(coordinates), { padding: [35, 35], maxZoom: 12 });
   }, [map, points, route]);
   return null;
+}
+
+function durationLabel(minutes?: number) {
+  if (minutes == null) return '';
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return hours ? `${hours}h${mins ? ` ${mins}min` : ''}` : `${mins}min`;
 }
 
 export function RetentionMap({ clients, serialsByClient, appointments, technicians, weekLabel, recencyFilter, onRecencyFilter, onOpen, onFollowup, onSchedule }: {
@@ -187,56 +181,29 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
   const routeTechnicianId = technicianIds.length === 1 ? technicianIds[0] : '';
   const clientByKey = useMemo(() => new Map(clients.map((client) => [client.client_key, client])), [clients]);
-
-  const selectedAgenda = useMemo(() => appointments
-    .filter((item) => !routeTechnicianId || item.technician_id === routeTechnicianId)
-    .slice()
-    .sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, routeTechnicianId]);
-
-  const sequenceByAppointment = useMemo(() => {
-    const result = new Map<string, number>();
-    selectedAgenda.forEach((item, index) => result.set(item.id, index + 1));
-    return result;
-  }, [selectedAgenda]);
+  const selectedAgenda = useMemo(() => appointments.filter((item) => !routeTechnicianId || item.technician_id === routeTechnicianId).slice().sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, routeTechnicianId]);
+  const sequenceByAppointment = useMemo(() => new Map(selectedAgenda.map((item, index) => [item.id, index + 1])), [selectedAgenda]);
 
   const loadMap = useCallback(async () => {
     setLoading(true);
     setError('');
-    const payloadClients = clients.map((client) => ({
-      client_key: client.client_key,
-      client_name: client.client_name,
-      branch: client.branch,
-      city: client.city,
-      last_service_at: client.last_service_at,
-    }));
+    const payloadClients = clients.map((client) => ({ client_key: client.client_key, client_name: client.client_name, branch: client.branch, city: client.city, last_service_at: client.last_service_at }));
     const visibleAppointments = technicianIds.length ? appointments.filter((item) => technicianIds.includes(item.technician_id)) : appointments;
     const payloadAppointments = visibleAppointments.map((item) => ({
-      id: item.id,
-      branch: item.branch,
-      appointment_date: item.appointment_date,
-      technician_id: item.technician_id,
+      id: item.id, branch: item.branch, appointment_date: item.appointment_date, technician_id: item.technician_id,
       technician_name: technicians.find((technician) => technician.id === item.technician_id)?.name || null,
-      client_name: item.client_name,
-      equipment_serial: item.equipment_serial,
-      service_city: item.service_city,
-      service_reason: item.service_reason,
-      description: item.description,
+      client_name: item.client_name, equipment_serial: item.equipment_serial, service_city: item.service_city,
+      service_reason: item.service_reason, description: item.description,
     }));
-
-    const { data: response, error: invokeError } = await supabase.functions.invoke('retention-map-context', {
-      body: { clients: payloadClients, appointments: payloadAppointments, technician_id: routeTechnicianId || null },
-    });
-
-    if (invokeError) setError('A localização avançada não respondeu; usando a agenda e as cidades já disponíveis no mapa.');
+    const { data: response, error: invokeError } = await supabase.functions.invoke('retention-map-context', { body: { clients: payloadClients, appointments: payloadAppointments, technician_id: routeTechnicianId || null } });
+    if (invokeError) setError('Não consegui calcular o mapa rodoviário agora.');
     else setData((response || { points: [], route: null, unresolved: 0, geocoded_now: 0 }) as MapResponse);
     setLoading(false);
   }, [appointments, clients, routeTechnicianId, technicianIds, technicians]);
 
   useEffect(() => { void loadMap(); }, [loadMap]);
 
-  const routeLabel = routeTechnicianId
-    ? scheduledTechnicians.find((technician) => technician.id === routeTechnicianId)?.name || 'Técnico selecionado'
-    : '';
+  const routeLabel = routeTechnicianId ? scheduledTechnicians.find((technician) => technician.id === routeTechnicianId)?.name || 'Técnico selecionado' : '';
   const clientPoints = useMemo(() => data.points.filter((point) => point.kind === 'client'), [data.points]);
 
   const cityCenters = useMemo(() => {
@@ -245,100 +212,41 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       const key = fold(point.city);
       if (!key) continue;
       const current = totals.get(key) || { lat: 0, lng: 0, count: 0 };
-      current.lat += point.lat;
-      current.lng += point.lng;
-      current.count += 1;
-      totals.set(key, current);
+      current.lat += point.lat; current.lng += point.lng; current.count += 1; totals.set(key, current);
     }
     const result = new Map<string, [number, number]>();
     for (const [key, value] of totals) result.set(key, [value.lat / value.count, value.lng / value.count]);
-    for (const base of TECHNICAL_BASES) {
-      if (!result.has(fold(base.branch))) result.set(fold(base.branch), [base.lat, base.lng]);
-    }
+    for (const base of TECHNICAL_BASES) if (!result.has(fold(base.branch))) result.set(fold(base.branch), [base.lat, base.lng]);
     return result;
   }, [clientPoints]);
 
   const serverAppointmentById = useMemo(() => {
     const map = new Map<string, MapPoint>();
-    for (const point of data.points) {
-      if (point.kind !== 'appointment') continue;
-      map.set(point.id.replace('appointment:', ''), point);
-    }
+    for (const point of data.points) if (point.kind === 'appointment') map.set(point.id.replace('appointment:', ''), point);
     return map;
   }, [data.points]);
 
-  const visibleAgenda = useMemo(() => appointments
-    .filter((item) => !technicianIds.length || technicianIds.includes(item.technician_id))
-    .slice()
-    .sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, technicianIds]);
+  const visibleAgenda = useMemo(() => appointments.filter((item) => !technicianIds.length || technicianIds.includes(item.technician_id)).slice().sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, technicianIds]);
 
   const appointmentPoints = useMemo(() => visibleAgenda.flatMap((appointment) => {
     const serverPoint = serverAppointmentById.get(appointment.id);
     const technicianName = technicians.find((item) => item.id === appointment.technician_id)?.name || null;
-    if (serverPoint) {
-      return [{
-        ...serverPoint,
-        appointment_date: appointment.appointment_date,
-        technician_id: appointment.technician_id,
-        technician_name: technicianName,
-        client_name: appointment.client_name,
-        equipment_serial: appointment.equipment_serial,
-        service_city: appointment.service_city,
-        service_reason: appointment.service_reason,
-        description: appointment.description,
-      }];
-    }
-
+    if (serverPoint) return [{ ...serverPoint, appointment_date: appointment.appointment_date, technician_id: appointment.technician_id, technician_name: technicianName, client_name: appointment.client_name, equipment_serial: appointment.equipment_serial, service_city: appointment.service_city, service_reason: appointment.service_reason, description: appointment.description }];
     const city = String(appointment.service_city || '').trim();
     const center = cityCenters.get(fold(city));
     if (!center) return [];
-    return [{
-      id: `appointment:${appointment.id}`,
-      kind: 'appointment' as const,
-      lat: center[0],
-      lng: center[1],
-      precision: 'city',
-      branch: appointment.branch,
-      city,
-      appointment_date: appointment.appointment_date,
-      technician_id: appointment.technician_id,
-      technician_name: technicianName,
-      client_name: appointment.client_name,
-      equipment_serial: appointment.equipment_serial,
-      service_city: appointment.service_city,
-      service_reason: appointment.service_reason,
-      description: appointment.description,
-      location_source: 'agenda-city-fallback',
-    }];
+    return [{ id: `appointment:${appointment.id}`, kind: 'appointment' as const, lat: center[0], lng: center[1], precision: 'city', branch: appointment.branch, city, appointment_date: appointment.appointment_date, technician_id: appointment.technician_id, technician_name: technicianName, client_name: appointment.client_name, equipment_serial: appointment.equipment_serial, service_city: appointment.service_city, service_reason: appointment.service_reason, description: appointment.description, location_source: 'agenda-city-fallback' }];
   }), [cityCenters, serverAppointmentById, technicians, visibleAgenda]);
 
-  const routeAppointmentPoints = useMemo(() => routeTechnicianId
-    ? appointmentPoints.filter((point) => point.technician_id === routeTechnicianId)
-    : [], [appointmentPoints, routeTechnicianId]);
-
-  const automaticRoute = useMemo<[number, number][]>(() => {
-    const route: [number, number][] = [];
-    for (const point of routeAppointmentPoints) {
-      const coordinate: [number, number] = [point.lat, point.lng];
-      const previous = route[route.length - 1];
-      if (!previous || Math.abs(previous[0] - coordinate[0]) > 0.00015 || Math.abs(previous[1] - coordinate[1]) > 0.00015) route.push(coordinate);
-    }
-    return route;
-  }, [routeAppointmentPoints]);
-
-  const fitPoints = useMemo(() => routeTechnicianId
-    ? routeAppointmentPoints
-    : [...data.points.filter((point) => point.kind !== 'appointment'), ...appointmentPoints], [appointmentPoints, data.points, routeAppointmentPoints, routeTechnicianId]);
-
+  const routeAppointmentPoints = useMemo(() => routeTechnicianId ? appointmentPoints.filter((point) => point.technician_id === routeTechnicianId) : [], [appointmentPoints, routeTechnicianId]);
+  const roadRoute = useMemo<[number, number][]>(() => routeTechnicianId && data.route && !data.route.approximate ? data.route.geometry : [], [data.route, routeTechnicianId]);
+  const fitPoints = useMemo(() => routeTechnicianId ? routeAppointmentPoints : [...data.points.filter((point) => point.kind !== 'appointment'), ...appointmentPoints], [appointmentPoints, data.points, routeAppointmentPoints, routeTechnicianId]);
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
 
   return <div className="retention-map-shell">
     <div className="map-toolbar">
-      <div>
-        <strong>Mapa de retenção</strong>
-        <span>{weekLabel} · {requestedClients.toLocaleString('pt-BR')} clientes analisados</span>
-      </div>
+      <div><strong>Mapa de retenção</strong><span>{weekLabel} · {requestedClients.toLocaleString('pt-BR')} clientes analisados</span></div>
       <div className="map-toolbar-actions">
         <CheckboxMultiSelect label="Técnico" items={scheduledTechnicians.map((technician) => ({ value: technician.id, label: technician.name }))} selected={technicianIds} onChange={setTechnicianIds} allLabel="Todos os técnicos" compact />
         <button type="button" className="subtle-button" onClick={() => void loadMap()} disabled={loading}>{loading ? <Loader2 className="spin" size={15}/> : <RefreshCw size={15}/>} Atualizar</button>
@@ -347,46 +255,35 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     <div className="map-legend interactive">
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`}><i style={{ background: item.color }}/>{item.label}</button>)}
-      <span>🏠 base técnica</span>
-      <span>🧑‍🔧 agenda numerada</span>
-      <span>🚗 deslocamento</span>
-      <span>━ rota automática</span>
+      <span>🏠 base técnica</span><span>🧑‍🔧 agenda numerada</span><span>🚗 deslocamento</span><span>━ rota por rodovia</span>
     </div>
 
     {error && <div className="map-message error">{error}</div>}
     {!error && data.points.length === 0 && loading && <div className="map-message"><Loader2 className="spin" size={18}/> Preparando mapa completo...</div>}
+    {routeTechnicianId && data.route?.routing_error && <div className="map-message error">A agenda está localizada, mas a rota rodoviária não respondeu. Nenhuma linha reta será inventada.</div>}
 
     <div className="retention-map">
       <MapContainer center={[-10.5, -52]} zoom={4} scrollWheelZoom preferCanvas className="leaflet-map">
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <FitMap points={fitPoints} route={automaticRoute} />
-
-        {routeTechnicianId && automaticRoute.length >= 2 ? <Polyline positions={automaticRoute} pathOptions={{ color: '#1d4ed8', weight: 6, opacity: 0.88 }} /> : null}
+        <FitMap points={fitPoints} route={roadRoute} />
+        {roadRoute.length >= 2 ? <Polyline positions={roadRoute} pathOptions={{ color: '#1d4ed8', weight: 6, opacity: 0.9 }} /> : null}
 
         {clientPoints.map((point) => {
           const client = point.client_key ? clientByKey.get(point.client_key) : undefined;
           if (!client) return null;
           const serials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
-          const color = recencyColor(point.last_service_at);
           const emphasized = Boolean(routeTechnicianId && point.near_route);
-          return <CircleMarker key={point.id} center={visiblePosition(point)} radius={emphasized ? 8 : routeTechnicianId ? 5 : 6} pathOptions={{ color: emphasized ? '#0f172a' : '#fff', weight: emphasized ? 2.5 : 1.5, fillColor: color, fillOpacity: emphasized ? 1 : routeTechnicianId ? 0.48 : 0.9 }}>
+          return <CircleMarker key={point.id} center={visiblePosition(point)} radius={emphasized ? 8 : routeTechnicianId ? 5 : 6} pathOptions={{ color: emphasized ? '#0f172a' : '#fff', weight: emphasized ? 2.5 : 1.5, fillColor: recencyColor(point.last_service_at), fillOpacity: emphasized ? 1 : routeTechnicianId ? 0.48 : 0.9 }}>
             <Tooltip direction="top" offset={[0, -5]}>{client.client_name}{emphasized && point.route_distance_km != null ? ` · ${point.route_distance_km} km da rota` : ''}</Tooltip>
-            <Popup minWidth={250}>
-              <div className="map-popup-card">
-                <strong>{client.client_name}</strong>
-                <span>{client.city || 'Cidade não informada'} · {serials.length} máquina{serials.length === 1 ? '' : 's'}</span>
-                <small>{point.last_service_at ? `Último atendimento: ${dateFmt.format(new Date(point.last_service_at))}` : 'Sem data de atendimento'}</small>
-                {point.precision === 'city' && <small>Posição aproximada pela cidade</small>}
-                {point.precision !== 'city' && point.location_label && <small>Endereço localizado: {point.location_label}</small>}
-                {emphasized && point.route_distance_km != null && <small className="near-route-note">Aprox. {point.route_distance_km} km da rota do técnico</small>}
-                {serials.length > 0 && <small className="map-popup-serial">{serials.slice(0, 2).join(' · ')}{serials.length > 2 ? ` +${serials.length - 2}` : ''}</small>}
-                <div className="map-popup-actions">
-                  <button type="button" onClick={() => onOpen(client)}>Ver ficha</button>
-                  <button type="button" onClick={() => onFollowup(client)}>Follow-up</button>
-                  <button type="button" className="map-primary-action" onClick={() => onSchedule(client, serials.length === 1 ? serials[0] : '', routeTechnicianId)}><CalendarPlus size={13}/> Agendar</button>
-                </div>
-              </div>
-            </Popup>
+            <Popup minWidth={250}><div className="map-popup-card">
+              <strong>{client.client_name}</strong><span>{client.city || 'Cidade não informada'} · {serials.length} máquina{serials.length === 1 ? '' : 's'}</span>
+              <small>{point.last_service_at ? `Último atendimento: ${dateFmt.format(new Date(point.last_service_at))}` : 'Sem data de atendimento'}</small>
+              {point.precision === 'city' && <small>Posição aproximada pela cidade</small>}
+              {point.precision !== 'city' && point.location_label && <small>Endereço localizado: {point.location_label}</small>}
+              {emphasized && point.route_distance_km != null && <small className="near-route-note">Aprox. {point.route_distance_km} km da rota do técnico</small>}
+              {serials.length > 0 && <small className="map-popup-serial">{serials.slice(0, 2).join(' · ')}{serials.length > 2 ? ` +${serials.length - 2}` : ''}</small>}
+              <div className="map-popup-actions"><button type="button" onClick={() => onOpen(client)}>Ver ficha</button><button type="button" onClick={() => onFollowup(client)}>Follow-up</button><button type="button" className="map-primary-action" onClick={() => onSchedule(client, serials.length === 1 ? serials[0] : '', routeTechnicianId)}><CalendarPlus size={13}/> Agendar</button></div>
+            </div></Popup>
           </CircleMarker>;
         })}
 
@@ -399,16 +296,13 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const tooltip = `${travel ? 'Deslocamento' : `Agenda ${sequence}`} · ${point.technician_name || 'Técnico'}${point.service_city ? ` · ${point.service_city}` : ''}`;
           return <Marker key={point.id} position={agendaVisiblePosition(appointmentPoints, index)} icon={agendaIcon(sequence, travel)} zIndexOffset={selected ? 1200 : 800}>
             <Tooltip permanent={selected} direction="top" offset={[0, -21]} className="technician-tooltip">{selected ? `${sequence}. ${dayLabel} · ${point.service_city || point.city || 'Destino'}` : tooltip}</Tooltip>
-            <Popup minWidth={260}>
-              <div className="map-popup-card technician-card">
-                <strong>{travel ? `🚗 Deslocamento ${sequence}` : `🧑‍🔧 Agenda ${sequence}`} · {point.technician_name || 'Técnico agendado'}</strong>
-                <span>{point.appointment_date ? dateFmt.format(new Date(`${point.appointment_date}T12:00:00`)) : ''} · {point.service_city || point.city || 'Cidade não informada'}</span>
-                {!travel && <small>{point.client_name || 'Cliente não informado'}</small>}
-                {travel && <small>Deslocamento registrado na agenda.</small>}
-                {point.service_reason && <small>{point.service_reason}</small>}
-                {point.equipment_serial && <small>{point.equipment_serial}</small>}
-              </div>
-            </Popup>
+            <Popup minWidth={260}><div className="map-popup-card technician-card">
+              <strong>{travel ? `🚗 Deslocamento ${sequence}` : `🧑‍🔧 Agenda ${sequence}`} · {point.technician_name || 'Técnico agendado'}</strong>
+              <span>{point.appointment_date ? dateFmt.format(new Date(`${point.appointment_date}T12:00:00`)) : ''} · {point.service_city || point.city || 'Cidade não informada'}</span>
+              {!travel && <small>{point.client_name || 'Cliente não informado'}</small>}
+              {travel && <small>Deslocamento registrado na agenda.</small>}
+              {point.service_reason && <small>{point.service_reason}</small>}{point.equipment_serial && <small>{point.equipment_serial}</small>}
+            </div></Popup>
           </Marker>;
         })}
 
@@ -418,10 +312,10 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     <div className="map-footer">
       <div><MapPinned size={15}/><span>{locatedClients.toLocaleString('pt-BR')} de {requestedClients.toLocaleString('pt-BR')} clientes no mapa</span></div>
-      {routeTechnicianId && <div><Route size={15}/><span>{routeLabel}: {routeAppointmentPoints.length} agenda{routeAppointmentPoints.length === 1 ? '' : 's'} na semana{automaticRoute.length >= 2 ? ` · ${automaticRoute.length} cidades/pontos na rota` : ' · sem mudança de cidade até agora'}{data.route?.nearby_clients != null ? ` · ${data.route.nearby_clients} clientes próximos` : ''}</span></div>}
+      {routeTechnicianId && <div><Route size={15}/><span>{routeLabel}: {routeAppointmentPoints.length} agenda{routeAppointmentPoints.length === 1 ? '' : 's'} na semana{data.route && !data.route.approximate ? ` · ${data.route.distance_km ?? 0} km · ${durationLabel(data.route.duration_min)}` : routeAppointmentPoints.length >= 2 ? ' · rota rodoviária indisponível' : ' · aguardando próximo destino'}{data.route?.nearby_clients != null ? ` · ${data.route.nearby_clients} clientes próximos` : ''}</span></div>}
       {technicianIds.length > 1 && <div><span>{technicianIds.length} técnicos selecionados · selecione apenas 1 para destacar a rota</span></div>}
       {data.unresolved > 0 && <div className="map-unresolved"><span>{data.unresolved} clientes sem localização suficiente</span></div>}
     </div>
-    <div className="map-attribution-note">Mapa © OpenStreetMap · a rota é construída automaticamente pela sequência real da agenda; atendimentos repetidos no mesmo local aparecem separados e a linha continua quando surgir o próximo destino.</div>
+    <div className="map-attribution-note">Mapa © OpenStreetMap · a linha azul segue a malha rodoviária calculada para a sequência real da agenda. Se o roteador não responder, o sistema não desenha uma reta falsa.</div>
   </div>;
 }
