@@ -57,6 +57,10 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
 
 function saleTotal(item: Followup) { return Number(item.parts_value || 0) + Number(item.services_value || 0); }
 function displayValue(item: Followup) { const sale = saleTotal(item); return sale > 0 ? sale : Number(item.estimated_value || 0); }
+function stageText(item: Followup) {
+  if (item.stage !== 'encerrar' && displayValue(item) > 0) return 'Oportunidade';
+  return stageLabels[item.stage] || 'Prospectar';
+}
 function resultText(item: Followup) {
   const base = item.result ? resultLabels[item.result] : 'Em andamento';
   const reason = item.lost_reason ? lostReasonLabels[item.lost_reason] : '';
@@ -68,7 +72,7 @@ function columnValue(item: Followup, column: ColumnKey) {
   if (column === 'client') return item.client_name;
   if (column === 'note') return item.notes || 'Sem observação';
   if (column === 'owner') return ownerText(item);
-  if (column === 'stage') return stageLabels[item.stage] || 'Prospectar';
+  if (column === 'stage') return stageText(item);
   if (column === 'next') return nextText(item);
   if (column === 'result') return resultText(item);
   return displayValue(item) > 0 ? money.format(displayValue(item)) : 'Sem valor';
@@ -127,11 +131,17 @@ export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [filters, setFilters] = useState<Record<ColumnKey, string>>({ client: '', note: '', owner: '', stage: '', next: '', result: '', value: '' });
   const [selectedFilters, setSelectedFilters] = useState<Record<ColumnKey, string[]>>({ client: [], note: [], owner: [], stage: [], next: [], result: [], value: [] });
+  const [valueRevision, setValueRevision] = useState(0);
 
-  const saveQuickValue = onQuickValue || (async (item: Followup, value: number | null) => {
+  const baseQuickValue = onQuickValue || (async (item: Followup, value: number | null) => {
     const { error } = await supabase.from('followups').update({ estimated_value: value }).eq('id', item.id);
     if (error) console.error('followup_quick_value_failed', error);
   });
+  const saveQuickValue = async (item: Followup, value: number | null) => {
+    await baseQuickValue(item, value);
+    item.estimated_value = value;
+    setValueRevision((current) => current + 1);
+  };
   const activeRows = useMemo(() => rows.filter((item) => item.stage !== 'encerrar'), [rows]);
   const historyRows = useMemo(() => rows.filter((item) => item.stage === 'encerrar' || Boolean(item.result)), [rows]);
   const sourceRows = tab === 'history' ? historyRows : activeRows;
@@ -139,13 +149,13 @@ export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
     const map = {} as Record<ColumnKey, string[]>;
     (['client','note','owner','stage','next','result','value'] as ColumnKey[]).forEach((column) => { map[column] = Array.from(new Set(sourceRows.map((item) => columnValue(item, column)))).sort((a,b) => a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' })); });
     return map;
-  }, [sourceRows]);
+  }, [sourceRows, valueRevision]);
 
   function updateSort(column: ColumnKey, direction: SortDirection) { setSortKey(column); setSortDirection(direction); setActiveColumn(null); }
   const filtered = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const list = sourceRows.filter((item) => {
-      const globalText = `${item.client_name} ${item.equipment_serial || ''} ${item.branch} ${item.notes || ''} ${ownerText(item)} ${stageLabels[item.stage] || ''} ${nextText(item)} ${resultText(item)}`.toLowerCase();
+      const globalText = `${item.client_name} ${item.equipment_serial || ''} ${item.branch} ${item.notes || ''} ${ownerText(item)} ${stageText(item)} ${nextText(item)} ${resultText(item)}`.toLowerCase();
       if (normalizedSearch && !globalText.includes(normalizedSearch)) return false;
       return (['client','note','owner','stage','next','result','value'] as ColumnKey[]).every((column) => {
         const value = columnValue(item, column);
@@ -161,7 +171,7 @@ export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
       return columnValue(a, sortKey).localeCompare(columnValue(b, sortKey), 'pt-BR', { numeric: true, sensitivity: 'base' }) * direction;
     });
     return list;
-  }, [sourceRows, search, filters, selectedFilters, sortKey, sortDirection]);
+  }, [sourceRows, search, filters, selectedFilters, sortKey, sortDirection, valueRevision]);
 
   const headers = (column: ColumnKey, label: string, numeric = false) => <ColumnHeader column={column} label={label} activeColumn={activeColumn} setActiveColumn={setActiveColumn} sortKey={sortKey} sortDirection={sortDirection} setSort={updateSort} filter={filters[column]} setFilter={(value) => setFilters((current) => ({ ...current, [column]: value }))} options={optionMap[column] || []} selected={selectedFilters[column]} setSelected={(values) => setSelectedFilters((current) => ({ ...current, [column]: values }))} numeric={numeric}/>;
 
@@ -182,7 +192,7 @@ export function FollowupView({ rows, loading, onNew, onEdit, onQuickValue }: {
         <div className="followup-client-cell"><strong>{item.client_name}</strong><small>{item.equipment_serial || item.branch}</small></div>
         <div className="followup-note-cell"><strong>{item.notes || 'Sem observação registrada'}</strong><small>{item.updated_at ? dateFmt.format(new Date(item.updated_at)) : ''}</small></div>
         <div className="followup-owner-cell"><strong>{ownerText(item)}</strong></div>
-        <span className={`followup-stage stage-${item.stage}`}>{stageLabels[item.stage] || 'Prospectar'}</span>
+        <span className={`followup-stage ${stageText(item) === 'Oportunidade' ? 'stage-opportunity' : `stage-${item.stage}`}`}>{stageText(item)}</span>
         <strong>{item.next_followup_date ? dateFmt.format(new Date(`${item.next_followup_date}T12:00:00`)) : '—'}</strong>
         <span className={`followup-result result-${item.result || 'open'}`}>{resultText(item)}</span>
         <InlineValue item={item} onSave={saveQuickValue}/>
