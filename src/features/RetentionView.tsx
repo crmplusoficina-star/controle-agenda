@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp, Filter, List, Map, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, Check, Filter, List, Map, Search, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Appointment, ClientSummary, Followup, Technician } from '../types';
 import { daysBetween } from '../lib/date';
 import { supabase } from '../lib/supabase';
@@ -67,7 +67,18 @@ function foldText(value: string | null | undefined) {
 function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, sortDirection, setSort, filter, setFilter, numeric }: ColumnHeaderProps) {
   const active = activeColumn === column;
   const sorted = sortKey === column;
-  return <div className="retention-head-cell">
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setActiveColumn(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    return () => document.removeEventListener('pointerdown', closeOnOutside);
+  }, [active, setActiveColumn]);
+
+  return <div className="retention-head-cell" ref={rootRef}>
     <button className={`column-head-button ${filter ? 'has-filter' : ''}`} type="button" onClick={() => setActiveColumn(active ? null : column)}>
       <span>{label}</span>
       {sorted ? (sortDirection === 'asc' ? <ArrowUp size={13}/> : <ArrowDown size={13}/>) : <Filter size={13}/>} 
@@ -78,8 +89,11 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
         <button type="button" onClick={() => setSort(column, 'asc')}><ArrowUp size={14}/> {numeric ? 'Menor primeiro' : 'A → Z'}</button>
         <button type="button" onClick={() => setSort(column, 'desc')}><ArrowDown size={14}/> {numeric ? 'Maior primeiro' : 'Z → A'}</button>
       </div>
-      <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={column === 'treatment' ? 'Ex.: Em tratativa' : numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
-      {filter && <button className="clear-column-filter" type="button" onClick={() => setFilter('')}><X size={13}/> Limpar filtro</button>}
+      <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') setActiveColumn(null); }} placeholder={column === 'treatment' ? 'Ex.: Em tratativa' : numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
+      <div style={{ display: 'grid', gridTemplateColumns: filter ? '1fr 1fr' : '1fr', gap: 6, marginTop: 7 }}>
+        {filter && <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setFilter('')}><X size={13}/> Limpar filtro</button>}
+        <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setActiveColumn(null)}><Check size={13}/> Confirmar</button>
+      </div>
     </div>}
   </div>;
 }
