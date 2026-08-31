@@ -11,7 +11,7 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
   return (
     <aside className="sidebar">
       <div className="brand brand-image-wrap">
-        <img className="brand-image" src="/agenda-brand.svg?v=20260831-3" alt="Agenda" />
+        <img className="brand-image" src="/agenda-brand.svg?v=20260831-4" alt="Agenda" />
       </div>
       <nav>
         {items.map(({ id, label, icon: Icon }) => (
