@@ -90,8 +90,8 @@ function ColumnHeader({ column, label, activeColumn, setActiveColumn, sortKey, s
         <button type="button" onClick={() => setSort(column, 'desc')}><ArrowDown size={14}/> {numeric ? 'Maior primeiro' : 'Z → A'}</button>
       </div>
       <label className="column-filter-field"><span>Filtrar</span><input value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') setActiveColumn(null); }} placeholder={column === 'treatment' ? 'Ex.: Em tratativa' : numeric ? 'Ex.: 2' : 'Digite para filtrar'} inputMode={numeric ? 'numeric' : undefined}/></label>
-      <div style={{ display: 'grid', gridTemplateColumns: filter ? '1fr 1fr' : '1fr', gap: 6, marginTop: 7 }}>
-        {filter && <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setFilter('')}><X size={13}/> Limpar filtro</button>}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 7 }}>
+        <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setFilter('')}><X size={13}/> Limpar filtro</button>
         <button className="clear-column-filter" style={{ marginTop: 0 }} type="button" onClick={() => setActiveColumn(null)}><Check size={13}/> Confirmar</button>
       </div>
     </div>}
