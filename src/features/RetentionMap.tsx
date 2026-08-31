@@ -182,15 +182,17 @@ function editableClientIcon(color: string) {
   });
 }
 
-function FitMap({ points, route, freeze = false }: { points: MapPoint[]; route: [number, number][]; freeze?: boolean }) {
+function FitMap({ points, route, freeze = false, fitKey }: { points: MapPoint[]; route: [number, number][]; freeze?: boolean; fitKey: string }) {
   const map = useMap();
+  const lastFitKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (freeze) return;
+    if (freeze || lastFitKeyRef.current === fitKey) return;
     const coordinates: [number, number][] = route.length ? route : points.map((point) => point.kind === 'client' ? visiblePosition(point) : [point.lat, point.lng]);
     if (!coordinates.length) return;
+    lastFitKeyRef.current = fitKey;
     if (coordinates.length === 1) return void map.setView(coordinates[0], 11);
     map.fitBounds(L.latLngBounds(coordinates), { padding: [35, 35], maxZoom: 12 });
-  }, [map, points, route]);
+  }, [fitKey, freeze, map, points, route]);
   return null;
 }
 
@@ -611,6 +613,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   const selectedRoadRoute = routeTechnicianId ? roadRoutes.find((route) => route.technicianId === routeTechnicianId) : undefined;
   const fitRoute = routeTechnicianId ? selectedRoadRoute?.geometry || [] : roadRoutes.flatMap((route) => route.geometry);
   const fitPoints = useMemo(() => routeTechnicianId ? routeAppointmentPoints : [...data.points.filter((point) => point.kind !== 'appointment' && (point.kind !== 'client' || isBrazilPoint(point.lat, point.lng))), ...appointmentPoints], [appointmentPoints, data.points, routeAppointmentPoints, routeTechnicianId]);
+  const mapFitKey = `${weekLabel}|${technicianIds.length ? technicianIds.slice().sort().join('|') : 'all'}`;
   const locatedClients = data.located_clients ?? clientPoints.length;
   const requestedClients = data.requested_clients ?? clients.length;
   const editingClient = editingClientKey ? clientByKey.get(editingClientKey) : undefined;
@@ -652,7 +655,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <MapEditLock active={mapInteractionLocked} />
         <MapRouteFocusClear onClear={() => { if (pinnedRouteTechnicianId) setPinnedRouteTechnicianId(null); }} />
-        <FitMap points={fitPoints} route={fitRoute} freeze={mapInteractionLocked} />
+        <FitMap points={fitPoints} route={fitRoute} freeze={mapInteractionLocked} fitKey={mapFitKey} />
         {roadRoutes.flatMap((route) => {
           const appearance = routeAppearance(route.technicianId);
           const technicianName = technicians.find((item) => item.id === route.technicianId)?.name || 'Técnico';
