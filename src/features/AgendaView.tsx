@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { Appointment, Technician } from '../types';
 import { addDays, isoDate } from '../lib/date';
 import { supabase } from '../lib/supabase';
@@ -31,6 +31,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const [reasonFilters, setReasonFilters] = useState<string[]>([]);
 
   useEffect(() => { setLocalCopies([]); }, [weekStart]);
 
@@ -39,8 +40,15 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
     return [...appointments, ...localCopies.filter((item) => !known.has(item.id))];
   }, [appointments, localCopies]);
 
-  const forecast = allAppointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
+  const visibleAppointments = useMemo(() => reasonFilters.length
+    ? allAppointments.filter((item) => reasonFilters.includes(item.service_reason || ''))
+    : allAppointments, [allAppointments, reasonFilters]);
+  const forecast = visibleAppointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
   const dragged = draggedId ? allAppointments.find((item) => item.id === draggedId) || null : null;
+
+  function toggleReasonFilter(reason: string) {
+    setReasonFilters((current) => current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason]);
+  }
 
   async function copyAppointment(source: Appointment, targetDate: string, targetTechnicianId: string) {
     if (copying || source.appointment_date === targetDate || source.technician_id !== targetTechnicianId) return;
@@ -78,7 +86,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
 
   return <div className="agenda-view">
     <div className="agenda-toolbar">
-      <div><strong>{title}</strong><span>{allAppointments.length} atendimento{allAppointments.length === 1 ? '' : 's'} · {money.format(forecast)}</span></div>
+      <div><strong>{title}</strong><span>{visibleAppointments.length} atendimento{visibleAppointments.length === 1 ? '' : 's'} · {money.format(forecast)}{reasonFilters.length ? ` · ${reasonFilters.length} filtro${reasonFilters.length === 1 ? '' : 's'}` : ''}</span></div>
       <div className="toolbar-actions">
         <button className="subtle-button" onClick={() => onWeek(new Date())}>Hoje</button>
         <button className="icon-button" onClick={() => onWeek(addDays(weekStart, -7))}><ChevronLeft size={18} /></button>
@@ -87,8 +95,12 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
       </div>
     </div>
 
-    <div className="agenda-type-legend" aria-label="Legenda dos tipos de atendimento">
-      {APPOINTMENT_TYPE_LEGEND.map((item) => <span className="agenda-type-legend-item" key={item.label}><i className="agenda-type-swatch" style={{ background: item.color }} />{item.label}</span>)}
+    <div className="agenda-type-legend" aria-label="Filtros por tipo de atendimento">
+      {APPOINTMENT_TYPE_LEGEND.map((item) => {
+        const active = reasonFilters.includes(item.label);
+        return <button type="button" aria-pressed={active} className={`agenda-type-legend-item ${active ? 'active' : ''}`} key={item.label} onClick={() => toggleReasonFilter(item.label)}><i className="agenda-type-swatch" style={{ background: item.color }} />{item.label}</button>;
+      })}
+      {reasonFilters.length > 0 && <button type="button" className="agenda-type-clear" onClick={() => setReasonFilters([])}><X size={12}/> Limpar filtro</button>}
     </div>
 
     <div className="agenda-shell agenda-week-fit">
@@ -102,17 +114,18 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, loadi
           {days.map((day) => {
             const date = isoDate(day);
             const cellKey = `${tech.id}|${date}`;
-            const items = allAppointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
+            const allCellItems = allAppointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
+            const items = visibleAppointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
             const canDrop = Boolean(dragged && dragged.technician_id === tech.id && dragged.appointment_date !== date);
             return <div
               className={`day-cell ${dropTarget === cellKey && canDrop ? 'copy-drop-target' : ''}`}
               key={date}
-              onClick={() => items.length === 0 && !draggedId && onNew(date, tech.id)}
+              onClick={() => allCellItems.length === 0 && !draggedId && onNew(date, tech.id)}
               onDragOver={(event) => { if (!canDrop) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDropTarget(cellKey); }}
               onDragLeave={() => dropTarget === cellKey && setDropTarget(null)}
               onDrop={(event) => { event.preventDefault(); if (dragged && canDrop) void copyAppointment(dragged, date, tech.id); }}
             >
-              {items.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
+              {allCellItems.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
                 const typeStyle = appointmentTypeStyle(item.service_reason);
                 const hasForecast = Number(item.forecast_amount || 0) > 0;
                 return <button
