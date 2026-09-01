@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
+import { useSession } from '../session';
+import { answerArIA, type ArIAAction } from '../lib/ariaBrain';
 import './aria-widget.css';
 
 type DragState = {
@@ -11,13 +13,27 @@ type DragState = {
   moved: boolean;
 };
 
+type ChatMessage = {
+  id: number;
+  role: 'user' | 'aria';
+  text: string;
+  actions?: ArIAAction[];
+};
+
 export function ArIAWidget() {
+  const { user } = useSession();
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
   const [position, setPosition] = useState({ x: 22, y: 22 });
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { id: 1, role: 'aria', text: `Olá, ${user.name.split(' ')[0] || user.name}. Sou a ArIA. Posso consultar Agenda, Retenção, histórico G4 e Follow-up. Pergunte “o que você consegue fazer?” para ver minhas capacidades.` },
+  ]);
   const dragRef = useRef<DragState | null>(null);
   const suppressClickRef = useRef(false);
+  const nextId = useRef(2);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
     if ((event.target as HTMLElement).closest('button,input,textarea')) return;
@@ -52,8 +68,8 @@ export function ArIAWidget() {
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     drag.moved = true;
     suppressClickRef.current = true;
-    const width = open ? (expanded ? 470 : 340) : 96;
-    const height = open ? 300 : 48;
+    const width = open ? (expanded ? 500 : 370) : 96;
+    const height = open ? (expanded ? 520 : 420) : 48;
     const nextX = Math.max(8, Math.min(window.innerWidth - Math.min(width, window.innerWidth - 16), drag.originX - dx));
     const nextY = Math.max(8, Math.min(window.innerHeight - Math.min(height, window.innerHeight - 16), drag.originY - dy));
     setPosition({ x: nextX, y: nextY });
@@ -72,15 +88,41 @@ export function ArIAWidget() {
     setOpen(true);
   }
 
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
-    const message = text.trim();
-    if (!message) return;
-    if (message.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes('tutorial')) {
-      window.dispatchEvent(new Event('aria:tutorial:start'));
-      setOpen(false);
+  function scrollBottom() {
+    window.setTimeout(() => {
+      if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }, 20);
+  }
+
+  function runAction(action: ArIAAction) {
+    if (action.tutorial) {
+      window.dispatchEvent(new CustomEvent('aria:tutorial:start'));
+      return;
     }
+    if (action.view) window.dispatchEvent(new CustomEvent('aria:navigate', { detail: action }));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const value = text.trim();
+    if (!value || busy) return;
     setText('');
+    setMessages((current) => [...current, { id: nextId.current++, role: 'user', text: value }]);
+    setBusy(true);
+    scrollBottom();
+    try {
+      const reply = await answerArIA(value, user);
+      setMessages((current) => [...current, { id: nextId.current++, role: 'aria', text: reply.text, actions: reply.actions }]);
+      if (value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes('tutorial')) {
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent('aria:tutorial:start')), 220);
+      }
+    } catch (error) {
+      console.error('aria_answer_failed', error);
+      setMessages((current) => [...current, { id: nextId.current++, role: 'aria', text: 'Não consegui consultar os dados agora. Tente novamente em instantes.' }]);
+    } finally {
+      setBusy(false);
+      scrollBottom();
+    }
   }
 
   if (!open) {
@@ -111,19 +153,25 @@ export function ArIAWidget() {
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        <div className="aria-title"><span className="aria-avatar"><Bot size={18}/></span><div><strong>ArIA</strong><small>Assistente · Groq</small></div></div>
+        <div className="aria-title"><span className="aria-avatar"><Bot size={18}/></span><div><strong>ArIA</strong><small>Assistente operacional</small></div></div>
         <div className="aria-actions">
           <button type="button" onClick={() => setExpanded((value) => !value)} aria-label={expanded ? 'Reduzir ArIA' : 'Expandir ArIA'}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button>
           <button type="button" onClick={() => setOpen(false)} aria-label="Fechar ArIA"><X size={16}/></button>
         </div>
       </header>
       <div className="aria-drag-hint"><GripHorizontal size={15}/> segure o topo e arraste</div>
-      <div className="aria-body">
-        <div className="aria-message">Olá. Sou a <strong>ArIA</strong>. Se quiser rever as funções do sistema, escreva <strong>“Gostaria de ver o tutorial”</strong>.</div>
+      <div className="aria-body" ref={bodyRef}>
+        {messages.map((message) => <div key={message.id} className={`aria-chat-row ${message.role}`}>
+          <div className={`aria-message ${message.role}`}>{message.text.split('\n').map((line, index) => <span key={index}>{line || '\u00a0'}</span>)}</div>
+          {message.role === 'aria' && message.actions?.length ? <div className="aria-context-actions">
+            {message.actions.map((action, index) => <button type="button" key={`${action.label}-${index}`} onClick={() => runAction(action)}>{action.label}</button>)}
+          </div> : null}
+        </div>)}
+        {busy && <div className="aria-chat-row aria"><div className="aria-message aria aria-thinking">Consultando o contexto do app…</div></div>}
       </div>
       <form className="aria-input" onSubmit={submit}>
-        <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Digite uma mensagem para ArIA..." />
-        <button type="submit" disabled={!text.trim()} aria-label="Enviar mensagem"><Send size={17}/></button>
+        <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Pergunte sobre agenda, cliente ou follow-up..." />
+        <button type="submit" disabled={!text.trim() || busy} aria-label="Enviar mensagem"><Send size={17}/></button>
       </form>
     </section>
   );
