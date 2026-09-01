@@ -1,12 +1,85 @@
 import { supabase } from './supabase';
 import type { AppUser } from '../session';
-import type { ArIAReply } from './ariaBrain';
+import type { ArIAAction, ArIAReply } from './ariaBrain';
 
 const DAY = 86400000;
+const SUGGESTION_COOLDOWN = 7 * DAY;
+const IGNORE_COOLDOWN = 30 * DAY;
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+export type ArIAProspect = {
+  client_name: string;
+  branch: string;
+  city: string;
+};
+
+type SuggestionHistory = Record<string, {
+  suggestedAt?: number;
+  ignoredUntil?: number;
+  prospectedAt?: number;
+}>;
+
+type SuggestionAction = ArIAAction & {
+  operation?: 'prospect' | 'ignore';
+  prospects?: ArIAProspect[];
+};
 
 function fold(value: string) {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function prospectKey(item: Pick<ArIAProspect, 'client_name' | 'branch'>) {
+  return `${fold(item.client_name)}|${fold(item.branch || '')}`;
+}
+
+function suggestionStorageKey(user: AppUser) {
+  return `aria-suggestion-history-v1:${user.matricula}`;
+}
+
+function loadSuggestionHistory(user: AppUser): SuggestionHistory {
+  try {
+    return JSON.parse(localStorage.getItem(suggestionStorageKey(user)) || '{}') as SuggestionHistory;
+  } catch {
+    return {};
+  }
+}
+
+function saveSuggestionHistory(user: AppUser, history: SuggestionHistory) {
+  try {
+    localStorage.setItem(suggestionStorageKey(user), JSON.stringify(history));
+  } catch {
+    // O histórico local é complementar; a proteção contra Follow-up aberto continua no banco.
+  }
+}
+
+function recentlySuppressed(history: SuggestionHistory, key: string) {
+  const row = history[key];
+  if (!row) return false;
+  const now = Date.now();
+  if (row.prospectedAt) return true;
+  if (row.ignoredUntil && row.ignoredUntil > now) return true;
+  return Boolean(row.suggestedAt && now - row.suggestedAt < SUGGESTION_COOLDOWN);
+}
+
+function rememberSuggested(user: AppUser, prospects: ArIAProspect[]) {
+  const history = loadSuggestionHistory(user);
+  const now = Date.now();
+  prospects.forEach((item) => {
+    const key = prospectKey(item);
+    history[key] = { ...history[key], suggestedAt: now };
+  });
+  saveSuggestionHistory(user, history);
+}
+
+export function markArIASuggestionDecision(user: AppUser, prospects: ArIAProspect[], decision: 'prospect' | 'ignore') {
+  const history = loadSuggestionHistory(user);
+  const now = Date.now();
+  prospects.forEach((item) => {
+    const key = prospectKey(item);
+    if (decision === 'prospect') history[key] = { ...history[key], suggestedAt: now, prospectedAt: now, ignoredUntil: undefined };
+    else history[key] = { ...history[key], suggestedAt: now, ignoredUntil: now + IGNORE_COOLDOWN };
+  });
+  saveSuggestionHistory(user, history);
 }
 
 function monthsWithoutService(date: string | null | undefined) {
@@ -36,13 +109,13 @@ function cityFromMessage(message: string) {
 
 function isCityProspectIntent(message: string) {
   const text = fold(message);
-  const asksSuggestion = /(sugest|recomend|indiqu|selec|escolh)/.test(text)
+  const asksSuggestion = /(sugest|recomend|indiqu|selec|escolh|mostre)/.test(text)
     || /clientes?.*(entrar em contato|contatar|contactar|prospect)/.test(text)
     || /(entrar em contato|contatar|contactar|prospect).*(clientes?)/.test(text);
   return asksSuggestion && Boolean(cityFromMessage(message));
 }
 
-async function suggestRetentionClientsByCity(message: string): Promise<ArIAReply> {
+async function suggestRetentionClientsByCity(message: string, user: AppUser): Promise<ArIAReply> {
   const city = cityFromMessage(message);
   const count = requestedCount(message, 3);
   if (!city) return { text: 'Me diga a cidade para eu buscar clientes na Retenção.' };
@@ -60,12 +133,13 @@ async function suggestRetentionClientsByCity(message: string): Promise<ArIAReply
   if (error) return { text: `Não consegui consultar a Retenção de ${city} agora.` };
 
   const open = new Set((openFollowups || []).map((item: any) => `${fold(item.client_name || '')}|${fold(item.branch || '')}`));
+  const history = loadSuggestionHistory(user);
   const unique = new Map<string, any>();
 
   for (const row of rows || []) {
     if (!row.client_name) continue;
     const key = `${fold(row.client_name)}|${fold(row.branch || '')}`;
-    if (open.has(key)) continue;
+    if (open.has(key) || recentlySuppressed(history, key)) continue;
     const current = unique.get(key);
     if (!current || monthsWithoutService(row.last_service_at) > monthsWithoutService(current.last_service_at)) unique.set(key, row);
   }
@@ -79,23 +153,30 @@ async function suggestRetentionClientsByCity(message: string): Promise<ArIAReply
   const top = ranked.slice(0, count);
   if (!top.length) {
     return {
-      text: `Consultei a Retenção de ${city}, mas não encontrei clientes livres para sugerir agora. Desconsiderei quem já possui Follow-up aberto.`,
-      actions: [{ label: 'Abrir Retenção', view: 'retencao' }],
+      text: `Consultei a Retenção de ${city}, mas não encontrei novos clientes livres para sugerir agora. Desconsiderei quem já possui Follow-up aberto, quem foi sugerido nos últimos 7 dias e quem foi ignorado recentemente.`,
     };
   }
+
+  const prospects: ArIAProspect[] = top.map((row) => ({
+    client_name: row.client_name,
+    branch: row.branch,
+    city: row.city || city,
+  }));
+  rememberSuggested(user, prospects);
 
   const lines = top.map((row, index) => {
     const last = row.last_service_at ? dateFmt.format(new Date(row.last_service_at)) : 'sem data';
     return `${index + 1}. ${row.client_name}\n   ${row.city} · filial ${row.branch} · ${retentionLabel(row.last_service_at)}\n   Último atendimento: ${last} · ${Number(row.service_count || 0)} OS · ${Number(row.machine_count || 0)} máquina(s)`;
   });
 
+  const actions: SuggestionAction[] = [
+    { label: `Prospectar os ${top.length} clientes`, operation: 'prospect', prospects },
+    { label: 'Ignorar sugestão', operation: 'ignore', prospects },
+  ];
+
   return {
-    text: `Consultei a Retenção de ${top[0]?.city || city} e selecionei ${top.length} cliente(s) para você avaliar para Follow-up. Priorizei maior tempo sem atendimento e histórico de atendimento, e deixei de fora quem já tem tratativa aberta.\n\n${lines.join('\n\n')}\n\nEsses clientes ainda não foram adicionados ao Follow-up; são sugestões para sua decisão.`,
-    actions: [
-      { label: 'Abrir Retenção', view: 'retencao' },
-      { label: 'Ver no mapa', view: 'retencao', mode: 'map' },
-      { label: 'Abrir Follow-up', view: 'followup', tab: 'active' },
-    ],
+    text: `Consultei a Retenção de ${top[0]?.city || city} e selecionei ${top.length} cliente(s) para você avaliar para Follow-up. Priorizei maior tempo sem atendimento e histórico de atendimento, e deixei de fora quem já tem tratativa aberta ou foi sugerido recentemente.\n\n${lines.join('\n\n')}\n\nEsses clientes ainda não foram adicionados ao Follow-up; escolha abaixo se deseja prospectar todos ou ignorar esta sugestão.`,
+    actions: actions as ArIAAction[],
   };
 }
 
@@ -146,7 +227,7 @@ export async function learnCorrectionResilient(originalQuestion: string, origina
   return { localSaved, sharedSaved: !error };
 }
 
-export async function answerSmartArIA(message: string): Promise<ArIAReply | null> {
-  if (isCityProspectIntent(message)) return suggestRetentionClientsByCity(message);
+export async function answerSmartArIA(message: string, user: AppUser): Promise<ArIAReply | null> {
+  if (isCityProspectIntent(message)) return suggestRetentionClientsByCity(message, user);
   return null;
 }
