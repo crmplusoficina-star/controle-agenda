@@ -1,4 +1,4 @@
-export type ViewName = 'inicio' | 'agenda' | 'retencao' | 'followup' | 'dashboard';
+export type ViewName = 'inicio' | 'agenda' | 'retencao' | 'followup' | 'dashboard' | 'usuarios';
 
 export type Branch = { name: string };
 export type Technician = { id: string; branch: string; name: string; active: boolean };
