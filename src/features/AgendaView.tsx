@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Map, Plus, X } from 'lucide-react';
 import type { Appointment, ClientSummary, Technician } from '../types';
-import { addDays, isoDate } from '../lib/date';
+import { addDays, isoDate, startOfWeek } from '../lib/date';
 import { supabase } from '../lib/supabase';
 import { APPOINTMENT_TYPE_LEGEND, appointmentTypeStyle } from './appointmentTypes';
 import { RetentionMap } from './RetentionMap';
@@ -10,11 +10,47 @@ import './agenda-colors.css';
 
 const dayName = new Intl.DateTimeFormat('pt-BR', { weekday: 'short' });
 const dayDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
+const fullDayDate = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' });
+const monthTitle = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' });
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+
+type AgendaRange = 'today' | 'week' | 'fortnight' | 'month';
 
 const statusClass: Record<string, string> = {
   planejado: 'status-plan', confirmado: 'status-confirm', em_atendimento: 'status-progress', concluido: 'status-done', cancelado: 'status-cancel',
 };
+
+function firstOfMonth(input: Date) {
+  const date = new Date(input);
+  date.setDate(1);
+  date.setHours(12, 0, 0, 0);
+  return date;
+}
+
+function addMonths(input: Date, amount: number) {
+  const date = firstOfMonth(input);
+  date.setMonth(date.getMonth() + amount);
+  return date;
+}
+
+function daysForRange(range: AgendaRange, anchor: Date) {
+  if (range === 'today') return [new Date(anchor)];
+
+  if (range === 'week' || range === 'fortnight') {
+    const start = startOfWeek(anchor);
+    const calendarDays = range === 'week' ? 7 : 14;
+    return Array.from({ length: calendarDays }, (_, index) => addDays(start, index))
+      .filter((date) => date.getDay() !== 0);
+  }
+
+  const start = firstOfMonth(anchor);
+  const month = start.getMonth();
+  const days: Date[] = [];
+  for (let cursor = new Date(start); cursor.getMonth() === month; cursor = addDays(cursor, 1)) {
+    if (cursor.getDay() !== 0) days.push(new Date(cursor));
+  }
+  return days;
+}
 
 export function AgendaView({ weekStart, onWeek, technicians, appointments, clients, serialsByClient, loading, onNew, onEdit, onAddTechnician, onOpenClient, onFollowup, onSchedule }: {
   weekStart: Date;
@@ -31,23 +67,83 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
   onFollowup: (client: ClientSummary) => void;
   onSchedule: (client: ClientSummary, serial: string, technicianId: string) => void;
 }) {
-  const days = Array.from({ length: 6 }, (_, i) => addDays(weekStart, i));
-  const weekEnd = days[5];
-  const title = `${dayDate.format(weekStart)} — ${dayDate.format(weekEnd)}`;
+  const [range, setRange] = useState<AgendaRange>('week');
+  const [anchorDate, setAnchorDate] = useState(() => startOfWeek(weekStart));
   const [mode, setMode] = useState<'agenda' | 'map'>('agenda');
   const [mapRecency, setMapRecency] = useState<RecencyBucket | null>(null);
+  const [periodAppointments, setPeriodAppointments] = useState<Appointment[]>(appointments);
+  const [periodLoading, setPeriodLoading] = useState(false);
   const [localCopies, setLocalCopies] = useState<Appointment[]>([]);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
   const [reasonFilters, setReasonFilters] = useState<string[]>([]);
 
-  useEffect(() => { setLocalCopies([]); }, [weekStart]);
+  useEffect(() => {
+    if (range === 'week') setAnchorDate(startOfWeek(weekStart));
+  }, [weekStart, range]);
+
+  const days = useMemo(() => daysForRange(range, anchorDate), [range, anchorDate]);
+  const periodStart = days[0] || anchorDate;
+  const periodEnd = days[days.length - 1] || anchorDate;
+  const periodStartIso = isoDate(periodStart);
+  const periodEndIso = isoDate(periodEnd);
+
+  const title = range === 'today'
+    ? fullDayDate.format(periodStart).replace(/^./, (letter) => letter.toUpperCase())
+    : range === 'month'
+      ? monthTitle.format(periodStart).replace(/^./, (letter) => letter.toUpperCase())
+      : `${dayDate.format(periodStart)} — ${dayDate.format(periodEnd)}`;
+
+  const columnMin = range === 'today' ? 360 : 150;
+  const gridMinWidth = Math.max(720, 180 + days.length * columnMin);
+  const gridStyle = {
+    gridTemplateColumns: `180px repeat(${Math.max(days.length, 1)}, minmax(${columnMin}px, 1fr))`,
+    minWidth: `${gridMinWidth}px`,
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const technicianIds = technicians.map((item) => item.id);
+
+    async function loadPeriodAppointments() {
+      if (!technicianIds.length || !days.length) {
+        if (!cancelled) {
+          setPeriodAppointments([]);
+          setPeriodLoading(false);
+        }
+        return;
+      }
+
+      setPeriodLoading(true);
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status')
+        .in('technician_id', technicianIds)
+        .gte('appointment_date', periodStartIso)
+        .lte('appointment_date', periodEndIso)
+        .order('appointment_date');
+
+      if (cancelled) return;
+      if (error) {
+        const visibleDates = new Set(days.map(isoDate));
+        setPeriodAppointments(appointments.filter((item) => visibleDates.has(item.appointment_date)));
+      } else {
+        setPeriodAppointments((data || []) as Appointment[]);
+      }
+      setPeriodLoading(false);
+    }
+
+    void loadPeriodAppointments();
+    return () => { cancelled = true; };
+  }, [periodStartIso, periodEndIso, technicians, appointments, days.length]);
+
+  useEffect(() => { setLocalCopies([]); }, [range, periodStartIso, periodEndIso]);
 
   const allAppointments = useMemo(() => {
-    const known = new Set(appointments.map((item) => item.id));
-    return [...appointments, ...localCopies.filter((item) => !known.has(item.id))];
-  }, [appointments, localCopies]);
+    const known = new Set(periodAppointments.map((item) => item.id));
+    return [...periodAppointments, ...localCopies.filter((item) => !known.has(item.id))];
+  }, [periodAppointments, localCopies]);
 
   const visibleAppointments = useMemo(() => reasonFilters.length
     ? allAppointments.filter((item) => reasonFilters.includes(item.service_reason || ''))
@@ -57,6 +153,31 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
 
   function toggleReasonFilter(reason: string) {
     setReasonFilters((current) => current.includes(reason) ? current.filter((item) => item !== reason) : [...current, reason]);
+  }
+
+  function changeRange(next: AgendaRange) {
+    setRange(next);
+    if (next === 'today') {
+      setAnchorDate(new Date());
+      return;
+    }
+    if (next === 'month') {
+      setAnchorDate(firstOfMonth(anchorDate));
+      return;
+    }
+    const start = startOfWeek(anchorDate);
+    setAnchorDate(start);
+    if (next === 'week') onWeek(start);
+  }
+
+  function movePeriod(direction: -1 | 1) {
+    let next: Date;
+    if (range === 'today') next = addDays(anchorDate, direction);
+    else if (range === 'week') next = addDays(startOfWeek(anchorDate), direction * 7);
+    else if (range === 'fortnight') next = addDays(startOfWeek(anchorDate), direction * 14);
+    else next = addMonths(anchorDate, direction);
+    setAnchorDate(next);
+    if (range === 'week') onWeek(next);
   }
 
   async function copyAppointment(source: Appointment, targetDate: string, targetTechnicianId: string) {
@@ -101,9 +222,14 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
           <button type="button" className={mode === 'agenda' ? 'active' : ''} onClick={() => setMode('agenda')}><CalendarDays size={15}/> Agenda</button>
           <button type="button" className={mode === 'map' ? 'active' : ''} onClick={() => setMode('map')}><Map size={15}/> Mapa</button>
         </div>
-        <button className="subtle-button" onClick={() => onWeek(new Date())}>Hoje</button>
-        <button className="icon-button" onClick={() => onWeek(addDays(weekStart, -7))}><ChevronLeft size={18} /></button>
-        <button className="icon-button" onClick={() => onWeek(addDays(weekStart, 7))}><ChevronRight size={18} /></button>
+        <div className="agenda-range-tabs" aria-label="Período da agenda">
+          <button type="button" className={range === 'today' ? 'active' : ''} onClick={() => changeRange('today')}>Hoje</button>
+          <button type="button" className={range === 'week' ? 'active' : ''} onClick={() => changeRange('week')}>Semanal</button>
+          <button type="button" className={range === 'fortnight' ? 'active' : ''} onClick={() => changeRange('fortnight')}>Quinzenal</button>
+          <button type="button" className={range === 'month' ? 'active' : ''} onClick={() => changeRange('month')}>Mensal</button>
+        </div>
+        <button className="icon-button" type="button" onClick={() => movePeriod(-1)} aria-label="Período anterior"><ChevronLeft size={18} /></button>
+        <button className="icon-button" type="button" onClick={() => movePeriod(1)} aria-label="Próximo período"><ChevronRight size={18} /></button>
         <button className="primary-button" onClick={onAddTechnician}><Plus size={17} /> Técnico</button>
       </div>
     </div>
@@ -118,12 +244,12 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
       </div>
 
       <div className="agenda-shell agenda-week-fit">
-        <div className="agenda-grid agenda-head">
+        <div className="agenda-grid agenda-head" style={gridStyle}>
           <div className="tech-col">Técnico</div>
           {days.map((day) => <div key={isoDate(day)} className="day-head"><span>{dayName.format(day).replace('.', '')}</span><strong>{dayDate.format(day)}</strong></div>)}
         </div>
-        {loading ? <div className="agenda-loading">Carregando agenda...</div> : technicians.length === 0 ? <div className="agenda-empty"><strong>Nenhum técnico cadastrado.</strong><span>Adicione o primeiro técnico para começar a montar a agenda.</span><button className="primary-button" onClick={onAddTechnician}><Plus size={17}/> Adicionar técnico</button></div> : technicians.map((tech) => (
-          <div className="agenda-grid agenda-row" key={tech.id}>
+        {loading || periodLoading ? <div className="agenda-loading">Carregando agenda...</div> : technicians.length === 0 ? <div className="agenda-empty"><strong>Nenhum técnico cadastrado.</strong><span>Adicione o primeiro técnico para começar a montar a agenda.</span><button className="primary-button" onClick={onAddTechnician}><Plus size={17}/> Adicionar técnico</button></div> : technicians.map((tech) => (
+          <div className="agenda-grid agenda-row" style={gridStyle} key={tech.id}>
             <div className="tech-col tech-name"><strong>{tech.name}</strong><span>{tech.branch}</span></div>
             {days.map((day) => {
               const date = isoDate(day);
