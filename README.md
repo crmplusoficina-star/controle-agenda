@@ -13,6 +13,10 @@ A agenda é o centro do produto. O G4 ajuda a preencher contexto e identificar r
 - Vercel
 - Gemini opcional via Edge Function `agenda-insights`
 
+## Tutorial da ArIA
+
+O tutorial usa as quatro expressões da ArIA de forma aleatória e inclui passos guiados em que a interface destaca o controle correto e aguarda o clique do usuário antes de avançar.
+
 ## Desenvolvimento
 
 ```bash
