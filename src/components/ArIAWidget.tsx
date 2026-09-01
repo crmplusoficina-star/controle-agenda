@@ -20,6 +20,18 @@ type ChatMessage = {
   actions?: ArIAAction[];
 };
 
+function clickButton(text: string, scope?: string) {
+  const root = scope ? document.querySelector(scope) : document;
+  if (!root) return false;
+  const buttons = Array.from(root.querySelectorAll('button')) as HTMLButtonElement[];
+  const wanted = text.toLowerCase();
+  const button = buttons.find((item) => item.textContent?.replace(/\s+/g, ' ').trim().toLowerCase() === wanted)
+    || buttons.find((item) => item.textContent?.replace(/\s+/g, ' ').trim().toLowerCase().includes(wanted));
+  if (!button) return false;
+  button.click();
+  return true;
+}
+
 export function ArIAWidget() {
   const { user } = useSession();
   const [open, setOpen] = useState(false);
@@ -99,7 +111,17 @@ export function ArIAWidget() {
       window.dispatchEvent(new CustomEvent('aria:tutorial:start'));
       return;
     }
-    if (action.view) window.dispatchEvent(new CustomEvent('aria:navigate', { detail: action }));
+    if (!action.view) return;
+    const labels: Record<string, string> = { inicio: 'Início', agenda: 'Agenda', retencao: 'Retenção', followup: 'Follow-up' };
+    clickButton(labels[action.view], '.sidebar');
+    window.setTimeout(() => {
+      if (action.view === 'retencao' && action.mode) clickButton(action.mode === 'map' ? 'Mapa' : 'Lista', '.list-page');
+      if (action.view === 'followup' && action.tab) {
+        if (action.tab === 'calendar') clickButton('Agenda', '.followup-workspace');
+        else if (action.tab === 'history') clickButton('Histórico de vendas', '.followup-workspace');
+        else clickButton('Em andamento', '.followup-workspace');
+      }
+    }, 220);
   }
 
   async function submit(event: React.FormEvent) {
