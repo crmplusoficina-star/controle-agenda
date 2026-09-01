@@ -12,6 +12,7 @@ import { AgendaView } from './features/AgendaView';
 import { RetentionView } from './features/RetentionView';
 import { FollowupView } from './features/FollowupView';
 import { DashboardView } from './features/DashboardView';
+import { AdminUsersView } from './features/AdminUsersView';
 import { supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
 import { emptyAppointment, emptyFollowup } from './drafts';
@@ -54,12 +55,13 @@ function followupToDraft(item: Followup): FollowupDraft {
 }
 
 export default function App() {
-  const { user, branches: allowedBranches } = useSession();
+  const { user, branches: availableBranches, defaultBranches } = useSession();
   const [view, setView] = useState<ViewName>('agenda');
   const [branches, setBranches] = useState<Branch[]>([]);
   const [branch, setBranch] = useState(ALL);
   const [weekStart, setWeekStart] = useState(() => startOfWeek());
   const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [allTechnicians, setAllTechnicians] = useState<Technician[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [agendaLoading, setAgendaLoading] = useState(true);
   const [appointmentDraft, setAppointmentDraft] = useState<AppointmentDraft | null>(null);
@@ -71,6 +73,8 @@ export default function App() {
   const [showTechnician, setShowTechnician] = useState(false);
   const [techName, setTechName] = useState('');
   const [techBranch, setTechBranch] = useState('');
+  const [techExistingId, setTechExistingId] = useState('');
+  const [techError, setTechError] = useState('');
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [retentionLoading, setRetentionLoading] = useState(false);
   const [retentionFutureClients, setRetentionFutureClients] = useState<Set<string>>(new Set());
@@ -86,13 +90,13 @@ export default function App() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [showInsights, setShowInsights] = useState(false);
   const selectedBranches = effectiveBranchValues(branch, branches);
-  const defaultBranch = selectedBranches[0] || branches[0]?.name || '';
+  const defaultBranch = selectedBranches[0] || defaultBranches[0] || branches[0]?.name || '';
 
   useEffect(() => {
-    setBranches(allowedBranches);
-    setBranch(ALL);
-    setTechBranch(allowedBranches[0]?.name || '');
-  }, [allowedBranches]);
+    setBranches(availableBranches);
+    setBranch(defaultBranches.length ? defaultBranches.join(MULTI_SEPARATOR) : ALL);
+    setTechBranch(defaultBranches[0] || availableBranches[0]?.name || '');
+  }, [availableBranches, defaultBranches]);
 
   const loadAgenda = useCallback(async () => {
     if (!branches.length) {
@@ -365,15 +369,53 @@ export default function App() {
     await loadAgenda();
   }
 
+  async function openTechnicianManager() {
+    setTechError('');
+    setTechExistingId('');
+    setTechName('');
+    setTechBranch(defaultBranch);
+    const { data } = await supabase.from('technicians').select('id,branch,name,active').eq('active', true).order('name');
+    setAllTechnicians((data || []) as Technician[]);
+    setShowTechnician(true);
+  }
+
   async function addTechnician(e: FormEvent) {
     e.preventDefault();
-    if (!techName.trim() || !techBranch) return;
-    const { error } = await supabase.from('technicians').insert({ branch: techBranch, name: techName.trim() });
-    if (!error) {
-      setTechName('');
-      setShowTechnician(false);
-      await loadAgenda();
+    if (!techBranch) return;
+    setTechError('');
+
+    const response = techExistingId
+      ? await supabase.from('technicians').update({ branch: techBranch }).eq('id', techExistingId)
+      : techName.trim()
+        ? await supabase.from('technicians').insert({ branch: techBranch, name: techName.trim() })
+        : null;
+
+    if (!response) {
+      setTechError('Informe o nome do técnico.');
+      return;
     }
+    if (response.error) {
+      setTechError(response.error.message);
+      return;
+    }
+
+    setTechName('');
+    setTechExistingId('');
+    setTechError('');
+    setShowTechnician(false);
+    await loadAgenda();
+  }
+
+  async function changeTechnicianBranch(technicianId: string, nextBranch: string) {
+    const current = technicians.find((item) => item.id === technicianId);
+    if (!current || current.branch === nextBranch) return;
+    const { error } = await supabase.from('technicians').update({ branch: nextBranch }).eq('id', technicianId);
+    if (error) {
+      console.error('technician_branch_change_failed', error);
+      return;
+    }
+    setTechnicians((rows) => rows.map((item) => item.id === technicianId ? { ...item, branch: nextBranch } : item));
+    await loadAgenda();
   }
 
   async function openClient(client: ClientSummary) {
@@ -503,14 +545,15 @@ export default function App() {
       <Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} />
       <main className="content">
         {view === 'inicio' && <HomeView appointments={appointments} technicians={technicians} followups={followups} loading={agendaLoading || followupLoading} consultantName={user.name} consultantMatricula={user.matricula} onAppointment={openHomeAppointment} onFollowup={openHomeFollowup} />}
-        {view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(date) => setWeekStart(startOfWeek(date))} technicians={technicians} appointments={appointments} clients={clients} serialsByClient={retentionSerials} loading={agendaLoading || retentionLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} onOpenClient={openClient} onFollowup={(client) => { void newFollowup(client); }} onSchedule={scheduleFromRetention} />}
+        {view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(date) => setWeekStart(startOfWeek(date))} technicians={technicians} appointments={appointments} branches={branches} clients={clients} serialsByClient={retentionSerials} loading={agendaLoading || retentionLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => { void openTechnicianManager(); }} onTechnicianBranchChange={(id, nextBranch) => { void changeTechnicianBranch(id, nextBranch); }} onOpenClient={openClient} onFollowup={(client) => { void newFollowup(client); }} onSchedule={scheduleFromRetention} />}
         {view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} appointments={appointments} technicians={technicians} weekStart={weekStart} onFollowup={(client) => { void newFollowup(client); }} onOpen={openClient} onSchedule={scheduleFromRetention} />}
         {view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => { void newFollowup(); }} onEdit={openFollowup} />}
         {view === 'dashboard' && <DashboardView branches={branches} followups={followups} appointments={appointments} clients={clients} />}
+        {view === 'usuarios' && user.role === 'admin' && <AdminUsersView branches={branches} />}
       </main>
     </div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />
-    <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} onName={setTechName} onBranch={setTechBranch} onClose={() => setShowTechnician(false)} onSubmit={addTechnician} />
+    <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} technicians={allTechnicians} existingId={techExistingId} error={techError} onName={setTechName} onBranch={setTechBranch} onExisting={(id) => { setTechExistingId(id); const selected = allTechnicians.find((item) => item.id === id); if (selected && !techBranch) setTechBranch(selected.branch); }} onClose={() => { setShowTechnician(false); setTechError(''); }} onSubmit={addTechnician} />
     <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} onCreateFollowup={(client) => { setClientDetail(null); void newFollowup(client); }} />
     <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} error={followupError} onClose={() => { setFollowupDraft(null); setFollowupError(''); }} onSubmit={saveFollowup} />
     <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
