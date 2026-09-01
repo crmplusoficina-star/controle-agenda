@@ -69,9 +69,9 @@ export function DashboardView({ branches, followups, appointments, clients }: {
   const revenue = won.reduce((sum, item) => sum + saleValue(item), 0);
   const opportunityPipeline = open.reduce((sum, item) => sum + opportunityValue(item), 0);
   const agendaForecast = filteredAppointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
-  const activeRetention = filteredClients.filter((item) => ['0_3', '3_6', '6_12'].includes(recencyBucket(item.last_service_at) || '')).length;
+  const activeRetention = filteredClients.filter((item) => ['0-3', '3-6', '6-12'].includes(recencyBucket(item.last_service_at))).length;
   const retentionRate = filteredClients.length ? activeRetention / filteredClients.length : 0;
-  const inactive = filteredClients.filter((item) => ['12_18', '18_plus'].includes(recencyBucket(item.last_service_at) || '')).length;
+  const inactive = filteredClients.filter((item) => ['12-18', '18+'].includes(recencyBucket(item.last_service_at))).length;
 
   const today = new Date().toISOString().slice(0, 10);
   const prospectToday = filteredFollowups.filter((item) => item.created_at?.slice(0, 10) === today).length;
