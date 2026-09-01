@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Map, Plus, X } from 'lucide-react';
-import type { Appointment, ClientSummary, Technician } from '../types';
+import type { Appointment, Branch, ClientSummary, Technician } from '../types';
 import { addDays, isoDate, startOfWeek } from '../lib/date';
 import { supabase } from '../lib/supabase';
 import { APPOINTMENT_TYPE_LEGEND, appointmentTypeStyle } from './appointmentTypes';
@@ -52,17 +52,19 @@ function daysForRange(range: AgendaRange, anchor: Date) {
   return days;
 }
 
-export function AgendaView({ weekStart, onWeek, technicians, appointments, clients, serialsByClient, loading, onNew, onEdit, onAddTechnician, onOpenClient, onFollowup, onSchedule }: {
+export function AgendaView({ weekStart, onWeek, technicians, appointments, branches, clients, serialsByClient, loading, onNew, onEdit, onAddTechnician, onTechnicianBranchChange, onOpenClient, onFollowup, onSchedule }: {
   weekStart: Date;
   onWeek: (date: Date) => void;
   technicians: Technician[];
   appointments: Appointment[];
+  branches: Branch[];
   clients: ClientSummary[];
   serialsByClient: Record<string, string[]>;
   loading: boolean;
   onNew: (date: string, technicianId: string) => void;
   onEdit: (appointment: Appointment) => void;
   onAddTechnician: () => void;
+  onTechnicianBranchChange: (technicianId: string, branch: string) => void;
   onOpenClient: (client: ClientSummary) => void;
   onFollowup: (client: ClientSummary) => void;
   onSchedule: (client: ClientSummary, serial: string, technicianId: string) => void;
@@ -181,7 +183,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
   }
 
   async function copyAppointment(source: Appointment, targetDate: string, targetTechnicianId: string) {
-    if (copying || source.appointment_date === targetDate || source.technician_id !== targetTechnicianId) return;
+    if (copying || (source.appointment_date === targetDate && source.technician_id === targetTechnicianId)) return;
     const tech = technicians.find((item) => item.id === targetTechnicianId);
     if (!tech) return;
     setCopying(true);
@@ -250,13 +252,18 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
         </div>
         {loading || periodLoading ? <div className="agenda-loading">Carregando agenda...</div> : technicians.length === 0 ? <div className="agenda-empty"><strong>Nenhum técnico cadastrado.</strong><span>Adicione o primeiro técnico para começar a montar a agenda.</span><button className="primary-button" onClick={onAddTechnician}><Plus size={17}/> Adicionar técnico</button></div> : technicians.map((tech) => (
           <div className="agenda-grid agenda-row" style={gridStyle} key={tech.id}>
-            <div className="tech-col tech-name"><strong>{tech.name}</strong><span>{tech.branch}</span></div>
+            <div className="tech-col tech-name">
+              <strong>{tech.name}</strong>
+              <select className="tech-branch-select" value={tech.branch} onChange={(event) => onTechnicianBranchChange(tech.id, event.target.value)} aria-label={`Filial de ${tech.name}`} title="Clique para trocar a filial do técnico">
+                {branches.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+              </select>
+            </div>
             {days.map((day) => {
               const date = isoDate(day);
               const cellKey = `${tech.id}|${date}`;
               const allCellItems = allAppointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
               const items = visibleAppointments.filter((item) => item.technician_id === tech.id && item.appointment_date === date);
-              const canDrop = Boolean(dragged && dragged.technician_id === tech.id && dragged.appointment_date !== date);
+              const canDrop = Boolean(dragged && (dragged.technician_id !== tech.id || dragged.appointment_date !== date));
               return <div
                 className={`day-cell ${dropTarget === cellKey && canDrop ? 'copy-drop-target' : ''}`}
                 key={date}
@@ -276,7 +283,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, clien
                     onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('text/plain', item.id); }}
                     onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
                     onClick={(e) => { e.stopPropagation(); if (!draggedId) onEdit(item); }}
-                    title="Arraste para outro dia da mesma linha para copiar"
+                    title="Arraste para outro dia ou técnico para copiar"
                   >
                     <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
                     <span>{item.service_city || 'Cidade não informada'}</span>
