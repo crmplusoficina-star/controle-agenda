@@ -84,6 +84,14 @@ function randomImagePlan() {
   return steps.map(() => Math.floor(Math.random() * embeddedImages.length));
 }
 
+const blockerStyle = {
+  position: 'absolute' as const,
+  zIndex: 0,
+  background: 'rgba(15,23,42,.5)',
+  backdropFilter: 'blur(1px)',
+  pointerEvents: 'auto' as const,
+};
+
 export function TutorialOverlay() {
   const { user } = useSession();
   const images = useEmbeddedImages(embeddedImages);
@@ -217,11 +225,11 @@ export function TutorialOverlay() {
 
   return <div className={`tutorial-layer ${guided ? 'tutorial-guided' : ''}`} role="dialog" aria-modal="true" aria-label="Tutorial da Agenda Técnica">
     {guided && targetRect ? <>
-      <div className="tutorial-blocker" style={{ left: 0, top: 0, right: 0, height: targetRect.top }} />
-      <div className="tutorial-blocker" style={{ left: 0, top: targetRect.bottom, right: 0, bottom: 0 }} />
-      <div className="tutorial-blocker" style={{ left: 0, top: targetRect.top, width: targetRect.left, height: targetRect.height }} />
-      <div className="tutorial-blocker" style={{ left: targetRect.right, top: targetRect.top, right: 0, height: targetRect.height }} />
-      <div className="tutorial-focus-ring" style={{ left: targetRect.left, top: targetRect.top, width: targetRect.width, height: targetRect.height }} />
+      <div style={{ ...blockerStyle, left: 0, top: 0, right: 0, height: targetRect.top }} />
+      <div style={{ ...blockerStyle, left: 0, top: targetRect.bottom, right: 0, bottom: 0 }} />
+      <div style={{ ...blockerStyle, left: 0, top: targetRect.top, width: targetRect.left, height: targetRect.height }} />
+      <div style={{ ...blockerStyle, left: targetRect.right, top: targetRect.top, right: 0, height: targetRect.height }} />
+      <div style={{ position: 'absolute', zIndex: 1, left: targetRect.left, top: targetRect.top, width: targetRect.width, height: targetRect.height, border: '3px solid #0b63f6', borderRadius: 12, boxShadow: '0 0 0 5px rgba(11,99,246,.18), 0 12px 34px rgba(15,23,42,.24)', pointerEvents: 'none' }} />
     </> : <div className="tutorial-dim" />}
 
     <section className={`tutorial-card tutorial-pos-${index % 3}`}>
@@ -235,8 +243,8 @@ export function TutorialOverlay() {
         <div className="tutorial-topline"><span>Passo {index + 1} de {steps.length}</span><button type="button" onClick={() => finish(true)}><FastForward size={14}/> Pular tutorial</button></div>
         <h2>{step.title}</h2>
         <p>{text}</p>
-        {guided && <div className={`tutorial-action-hint ${targetMissing ? 'is-missing' : ''}`}>
-          <ArrowRight size={16}/><div><strong>{step.action}</strong><span>{targetMissing ? 'Não encontrei esse controle nesta tela. Você pode continuar manualmente.' : 'O tutorial avança automaticamente depois do clique.'}</span></div>
+        {guided && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 15, padding: '11px 12px', border: `1px solid ${targetMissing ? '#fde68a' : '#bfdbfe'}`, borderRadius: 12, background: targetMissing ? '#fffbeb' : '#eff6ff', color: targetMissing ? '#92400e' : '#1e3a8a' }}>
+          <ArrowRight size={16}/><div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><strong style={{ fontSize: 13, lineHeight: 1.35 }}>{step.action}</strong><span style={{ fontSize: 11, lineHeight: 1.4, color: '#64748b' }}>{targetMissing ? 'Não encontrei esse controle nesta tela. Você pode continuar manualmente.' : 'O tutorial avança automaticamente depois do clique.'}</span></div>
         </div>}
         <div className="tutorial-progress"><i style={{ width: `${((index + 1) / steps.length) * 100}%` }} /></div>
         <div className="tutorial-actions">
