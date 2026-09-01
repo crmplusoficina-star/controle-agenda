@@ -2,9 +2,7 @@ import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
-import { answerSmartArIA, learnCorrectionResilient } from '../lib/ariaSmart';
-import { useEmbeddedImage } from '../lib/ariaImages';
-import exp1 from '../tutorial/exp1';
+import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import './aria-widget.css';
 
 type DragState = {
@@ -23,6 +21,11 @@ type ChatMessage = {
   actions?: ArIAAction[];
 };
 
+type RichArIAAction = ArIAAction & {
+  operation?: 'prospect' | 'ignore';
+  prospects?: ArIAProspect[];
+};
+
 function clickButton(text: string, scope?: string) {
   const root = scope ? document.querySelector(scope) : document;
   if (!root) return false;
@@ -35,9 +38,13 @@ function clickButton(text: string, scope?: string) {
   return true;
 }
 
+function normalizedClientKey(clientName: string, branch: string) {
+  const fold = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  return `${fold(clientName)}|${fold(branch)}`;
+}
+
 export function ArIAWidget() {
   const { user } = useSession();
-  const avatarSrc = useEmbeddedImage(exp1);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -113,7 +120,80 @@ export function ArIAWidget() {
     }, 20);
   }
 
-  function runAction(action: ArIAAction) {
+  function appendArIAMessage(message: string) {
+    setMessages((current) => [...current, { id: nextId.current++, role: 'aria', text: message }]);
+    scrollBottom();
+  }
+
+  async function runAction(action: ArIAAction) {
+    const richAction = action as RichArIAAction;
+    const prospects = richAction.prospects || [];
+
+    if (richAction.operation === 'ignore' && prospects.length) {
+      markArIASuggestionDecision(user, prospects, 'ignore');
+      appendArIAMessage('Sugestão ignorada. Esses clientes não serão sugeridos novamente pelos próximos 30 dias.');
+      return;
+    }
+
+    if (richAction.operation === 'prospect' && prospects.length) {
+      if (busy) return;
+      setBusy(true);
+      try {
+        const { data: openRows } = await supabase.from('followups').select('client_name,branch').neq('stage', 'encerrar').limit(2000);
+        const openKeys = new Set((openRows || []).map((item: any) => normalizedClientKey(item.client_name || '', item.branch || '')));
+        let created = 0;
+        let alreadyOpen = 0;
+        let failed = 0;
+
+        for (const prospect of prospects) {
+          const key = normalizedClientKey(prospect.client_name, prospect.branch);
+          if (openKeys.has(key)) {
+            alreadyOpen += 1;
+            continue;
+          }
+          const { error } = await supabase.from('followups').insert({
+            branch: prospect.branch,
+            client_name: prospect.client_name,
+            equipment_serial: null,
+            stage: 'prospectar',
+            next_followup_date: null,
+            notes: 'Sugestão da ArIA',
+            result: null,
+            sale_kind: null,
+            parts_value: null,
+            services_value: null,
+            estimated_value: null,
+            created_by_matricula: user.matricula,
+            created_by_name: user.name,
+            updated_by_matricula: user.matricula,
+            updated_by_name: user.name,
+          });
+          if (!error) {
+            created += 1;
+            openKeys.add(key);
+          } else if (error.code === '23505') {
+            alreadyOpen += 1;
+          } else {
+            failed += 1;
+            console.error('aria_prospect_insert_failed', error);
+          }
+        }
+
+        markArIASuggestionDecision(user, prospects, 'prospect');
+        const details = [
+          created ? `${created} adicionada(s)` : '',
+          alreadyOpen ? `${alreadyOpen} já estava(m) em Follow-up` : '',
+          failed ? `${failed} não pôde/puderam ser adicionada(s)` : '',
+        ].filter(Boolean).join(' · ');
+        appendArIAMessage(`Pronto. ${details || 'As sugestões foram processadas.'} Vou abrir o Follow-up em andamento.`);
+        clickButton('Follow-up', '.sidebar');
+        window.setTimeout(() => clickButton('Em andamento', '.followup-workspace'), 250);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     if (action.tutorial) {
       window.dispatchEvent(new CustomEvent('aria:tutorial:start'));
       return;
@@ -143,7 +223,7 @@ export function ArIAWidget() {
       let reply;
       if (isArIACorrection(value) && lastQuestionRef.current) {
         const learned = await learnCorrectionResilient(lastQuestionRef.current, lastAnswerRef.current, value, user);
-        const applied = await answerSmartArIA(`${lastQuestionRef.current}. ${value}`);
+        const applied = await answerSmartArIA(`${lastQuestionRef.current}. ${value}`, user);
         if (applied) {
           reply = {
             ...applied,
@@ -157,7 +237,7 @@ export function ArIAWidget() {
           };
         }
       } else {
-        reply = await answerSmartArIA(value) || await answerArIA(value, user);
+        reply = await answerSmartArIA(value, user) || await answerArIA(value, user);
         lastQuestionRef.current = value;
         lastAnswerRef.current = reply.text;
       }
@@ -177,7 +257,7 @@ export function ArIAWidget() {
 
   const avatar = avatarFailed
     ? <span className="aria-avatar-fallback"><Bot size={18}/></span>
-    : <img className="aria-avatar-image" src={avatarSrc} alt="ArIA" onError={() => setAvatarFailed(true)} />;
+    : <img className="aria-avatar-image" src="/aria/aria-1.png" alt="ArIA" onError={() => setAvatarFailed(true)} />;
 
   if (!open) {
     return (
@@ -218,7 +298,7 @@ export function ArIAWidget() {
         {messages.map((message) => <div key={message.id} className={`aria-chat-row ${message.role}`}>
           <div className={`aria-message ${message.role}`}>{message.text.split('\n').map((line, index) => <span key={index}>{line || '\u00a0'}</span>)}</div>
           {message.role === 'aria' && message.actions?.length ? <div className="aria-context-actions">
-            {message.actions.map((action, index) => <button type="button" key={`${action.label}-${index}`} onClick={() => runAction(action)}>{action.label}</button>)}
+            {message.actions.map((action, index) => <button type="button" key={`${action.label}-${index}`} onClick={() => void runAction(action)}>{action.label}</button>)}
           </div> : null}
         </div>)}
         {busy && <div className="aria-chat-row aria"><div className="aria-message aria aria-thinking">Consultando o contexto do app…</div></div>}
