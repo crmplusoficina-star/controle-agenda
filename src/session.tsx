@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { LogIn } from 'lucide-react';
 import { supabase } from './lib/supabase';
+import { canonicalUser } from './lib/appUsers';
 import type { Branch } from './types';
 import './components/session.css';
 
@@ -45,7 +46,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const allowed = (branchRows || []).map((row) => ({ name: String(row.branch) }));
     if (!allowed.length) return false;
 
-    setUser({ matricula: String(userRow.matricula), name: String(userRow.name), role: userRow.role as AppRole });
+    const canonical = canonicalUser(clean);
+    setUser({
+      matricula: String(userRow.matricula),
+      name: canonical?.name || String(userRow.name),
+      role: canonical?.role || userRow.role as AppRole,
+    });
     setBranches(allowed);
     if (persist) localStorage.setItem(STORAGE_KEY, clean);
     return true;
