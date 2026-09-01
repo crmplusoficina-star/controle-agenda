@@ -12,6 +12,7 @@ export type AppUser = { matricula: string; name: string; role: AppRole };
 type SessionValue = {
   user: AppUser;
   branches: Branch[];
+  defaultBranches: string[];
   logout: () => void;
 };
 
@@ -27,6 +28,7 @@ export function useSession() {
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [defaultBranches, setDefaultBranches] = useState<string[]>([]);
   const [matricula, setMatricula] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -36,23 +38,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const clean = rawMatricula.replace(/\D/g, '').trim();
     if (!clean) return false;
 
-    const [{ data: userRow, error: userError }, { data: branchRows, error: branchError }] = await Promise.all([
+    const [{ data: userRow, error: userError }, { data: branchRows, error: branchError }, { data: allBranchRows, error: allBranchError }] = await Promise.all([
       supabase.from('app_users').select('matricula,name,role').eq('matricula', clean).eq('active', true).maybeSingle(),
       supabase.from('app_user_branches').select('branch').eq('matricula', clean).order('branch'),
+      supabase.from('app_branches').select('name').eq('active', true).order('name'),
     ]);
 
-    if (userError || branchError || !userRow) return false;
+    if (userError || branchError || allBranchError || !userRow) return false;
 
-    const allowed = (branchRows || []).map((row) => ({ name: String(row.branch) }));
-    if (!allowed.length) return false;
+    const allBranches = (allBranchRows || []).map((row) => ({ name: String(row.name) }));
+    if (!allBranches.length) return false;
 
     const canonical = canonicalUser(clean);
+    const storedDefaults = (branchRows || []).map((row) => String(row.branch));
+    const defaults = canonical?.branches === 'all'
+      ? []
+      : canonical?.branches?.length
+        ? canonical.branches
+        : storedDefaults;
+
     setUser({
       matricula: String(userRow.matricula),
       name: canonical?.name || String(userRow.name),
       role: canonical?.role || userRow.role as AppRole,
     });
-    setBranches(allowed);
+    setBranches(allBranches);
+    setDefaultBranches(defaults);
     if (persist) localStorage.setItem(STORAGE_KEY, clean);
     return true;
   }
@@ -82,11 +93,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(STORAGE_KEY);
     setUser(null);
     setBranches([]);
+    setDefaultBranches([]);
     setMatricula('');
     setError('');
   }
 
-  const value = useMemo(() => user ? { user, branches, logout } : null, [user, branches]);
+  const value = useMemo(() => user ? { user, branches, defaultBranches, logout } : null, [user, branches, defaultBranches]);
 
   if (loading) return <div className="session-loading">Carregando...</div>;
 
