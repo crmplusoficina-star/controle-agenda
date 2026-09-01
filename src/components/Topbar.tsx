@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Bell, LogOut } from 'lucide-react';
 import { CheckboxMultiSelect } from './CheckboxMultiSelect';
 import { useSession } from '../session';
@@ -14,6 +15,7 @@ const titles: Record<ViewName, { title: string; subtitle: string }> = {
 };
 
 const MULTI_SEPARATOR = '||';
+const ALL = '__all__';
 
 export function Topbar({ view, branches, branch, onBranch, insights, onBell }: {
   view: ViewName;
@@ -25,8 +27,18 @@ export function Topbar({ view, branches, branch, onBranch, insights, onBell }: {
 }) {
   const meta = titles[view];
   const unread = insights.filter((i) => i.status === 'new').length;
-  const selected = branch === '__all__' ? [] : branch.split(MULTI_SEPARATOR).filter(Boolean);
-  const { user, logout } = useSession();
+  const { user, defaultBranches, logout } = useSession();
+
+  // Consultores podem ver todas as filiais, mas começam sempre com as unidades
+  // atribuídas a eles. Isso evita o estado inicial "Todas" antes do filtro padrão.
+  const selected = branch === ALL
+    ? (user.role === 'consultor' ? defaultBranches : [])
+    : branch.split(MULTI_SEPARATOR).filter(Boolean);
+
+  useEffect(() => {
+    if (user.role !== 'consultor' || branch !== ALL || !defaultBranches.length) return;
+    onBranch(defaultBranches.join(MULTI_SEPARATOR));
+  }, [user.role, user.matricula, branch, defaultBranches, onBranch]);
 
   return (
     <header className="topbar">
@@ -36,7 +48,7 @@ export function Topbar({ view, branches, branch, onBranch, insights, onBell }: {
           label="Filial"
           items={branches.map((item) => ({ value: item.name, label: item.name }))}
           selected={selected}
-          onChange={(values) => onBranch(values.length ? values.join(MULTI_SEPARATOR) : '__all__')}
+          onChange={(values) => onBranch(values.length ? values.join(MULTI_SEPARATOR) : ALL)}
           allLabel="Todas"
           compact
         />}
