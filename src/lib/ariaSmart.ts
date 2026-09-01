@@ -97,22 +97,38 @@ function retentionLabel(date: string | null | undefined) {
 }
 
 function requestedCount(message: string, fallback = 3) {
-  const found = fold(message).match(/\b(\d{1,2})\s+(?:clientes?|sugestoes?|oportunidades?)/)?.[1];
-  return found ? Math.max(1, Math.min(12, Number(found))) : fallback;
+  const text = fold(message);
+  const numeric = text.match(/\b(\d{1,2})\s+(?:clientes?|sugestoes?|oportunidades?)/)?.[1];
+  if (numeric) return Math.max(1, Math.min(12, Number(numeric)));
+
+  const wordNumbers: Record<string, number> = {
+    um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6,
+    sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12,
+  };
+  const written = text.match(/\b(um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+clientes?\b/)?.[1];
+  return written ? wordNumbers[written] : fallback;
 }
 
 function cityFromMessage(message: string) {
   const raw = message.replace(/[?!.,]+$/g, '').trim();
   const matches = Array.from(raw.matchAll(/\b(?:em|de)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45}?)(?=\s+(?:que|com|para|e|ha|há|mais|sem|inativ|essa|esta|na|no|da|do|onde|durante)\b|$|[?!.,])/gi));
-  return matches.length ? matches[matches.length - 1][1].trim() : '';
+  if (matches.length) return matches[matches.length - 1][1].trim();
+
+  const compact = raw.match(/\bclientes?\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45})$/i)?.[1]?.trim();
+  return compact || '';
 }
 
 function isCityProspectIntent(message: string) {
   const text = fold(message);
-  const asksSuggestion = /(sugest|recomend|indiqu|selec|escolh|mostre)/.test(text)
-    || /clientes?.*(entrar em contato|contatar|contactar|prospect)/.test(text)
-    || /(entrar em contato|contatar|contactar|prospect).*(clientes?)/.test(text);
-  return asksSuggestion && Boolean(cityFromMessage(message));
+  const city = cityFromMessage(message);
+  if (!city || !/\bclientes?\b/.test(text)) return false;
+
+  const explicitSuggestion = /(sugir|sugest|recomend|indiqu|selec|escolh|mostr|list|aponte|separ)/.test(text);
+  const contactIntent = /clientes?.*(entrar em contato|contatar|contactar|prospect)|(?:entrar em contato|contatar|contactar|prospect).*(clientes?)/.test(text);
+  const shortNaturalRequest = (/\b\d{1,2}\s+clientes?\b/.test(text) || /\b(?:um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+clientes?\b/.test(text) || /^clientes?\b/.test(text))
+    && !/(quantos|quantas|quantidade|total|existem|existe|tem quant)/.test(text);
+
+  return explicitSuggestion || contactIntent || shortNaturalRequest;
 }
 
 async function suggestRetentionClientsByCity(message: string, user: AppUser): Promise<ArIAReply> {
