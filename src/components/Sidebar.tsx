@@ -25,7 +25,12 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
       </div>
       <nav>
         {visibleItems.map(({ id, label, icon: Icon }) => (
-          <button key={id} className={view === id ? 'nav-item active' : 'nav-item'} onClick={() => onView(id)}>
+          <button
+            key={id}
+            data-tutorial={`nav-${id}`}
+            className={view === id ? 'nav-item active' : 'nav-item'}
+            onClick={() => onView(id)}
+          >
             <Icon size={18} />
             <span>{label}</span>
           </button>
