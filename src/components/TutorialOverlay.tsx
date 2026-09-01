@@ -46,6 +46,18 @@ function sameRect(a: TargetRect | null, b: TargetRect) {
   return Boolean(a && Math.abs(a.left - b.left) < 1 && Math.abs(a.top - b.top) < 1 && Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1);
 }
 function randomImagePlan() { return steps.map(() => Math.floor(Math.random() * images.length)); }
+function guidedCardStyle(rect: TargetRect | null) {
+  if (!rect || typeof window === 'undefined') return undefined;
+  const targetOnRight = rect.left + rect.width / 2 > window.innerWidth / 2;
+  const targetOnBottom = rect.top + rect.height / 2 > window.innerHeight / 2;
+  return {
+    left: targetOnRight ? 24 : 'auto',
+    right: targetOnRight ? 'auto' : 24,
+    top: targetOnBottom ? 24 : 'auto',
+    bottom: targetOnBottom ? 'auto' : 24,
+    transform: 'none',
+  } as const;
+}
 
 const blockerStyle = { position: 'absolute' as const, zIndex: 0, background: 'rgba(15,23,42,.5)', backdropFilter: 'blur(1px)', pointerEvents: 'auto' as const };
 
@@ -141,7 +153,7 @@ export function TutorialOverlay() {
       <div style={{ position: 'absolute', zIndex: 1, left: targetRect.left, top: targetRect.top, width: targetRect.width, height: targetRect.height, border: '3px solid #0b63f6', borderRadius: 12, boxShadow: '0 0 0 5px rgba(11,99,246,.18), 0 12px 34px rgba(15,23,42,.24)', pointerEvents: 'none' }} />
     </> : <div className="tutorial-dim" />}
 
-    <section className={`tutorial-card tutorial-pos-${index % 3}`}>
+    <section className={`tutorial-card ${guided ? 'tutorial-card-guided' : `tutorial-pos-${index % 3}`}`} style={guided ? guidedCardStyle(targetRect) : undefined}>
       <div className="tutorial-aria-side">
         {!failedImages[imageIndex] ? <img src={images[imageIndex]} alt="ArIA" onError={() => setFailedImages((current) => ({ ...current, [imageIndex]: true }))} /> : <div className="tutorial-aria-fallback"><Bot size={34}/><strong>ArIA</strong></div>}
         <span>ArIA</span>
