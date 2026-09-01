@@ -24,6 +24,12 @@ type SuggestionAction = ArIAAction & {
   prospects?: ArIAProspect[];
 };
 
+type RetentionPeriod = {
+  minMonths?: number;
+  maxMonths?: number;
+  label: string;
+};
+
 function fold(value: string) {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
@@ -109,9 +115,63 @@ function requestedCount(message: string, fallback = 3) {
   return written ? wordNumbers[written] : fallback;
 }
 
+function requestedPeriod(message: string): RetentionPeriod | null {
+  const text = fold(message).replace(/[–—]/g, '-');
+
+  let match = text.match(/\b(?:entre|de)\s+(\d{1,2})\s*(?:e|a|-)\s*(\d{1,2})\s*meses?\b/);
+  if (!match) match = text.match(/\b(\d{1,2})\s*(?:a|-)\s*(\d{1,2})\s*meses?\b/);
+  if (match) {
+    const first = Number(match[1]);
+    const second = Number(match[2]);
+    const minMonths = Math.min(first, second);
+    const maxMonths = Math.max(first, second);
+    return { minMonths, maxMonths, label: `entre ${minMonths} e ${maxMonths} meses sem atendimento` };
+  }
+
+  match = text.match(/(?:\+|mais de|acima de|superior a|ha mais de)\s*(\d{1,2})\s*meses?/);
+  if (match) {
+    const minMonths = Number(match[1]);
+    return { minMonths, label: `há mais de ${minMonths} meses sem atendimento` };
+  }
+
+  match = text.match(/\b(?:ultimos?|nos ultimos?|dos ultimos?|ate|no maximo)\s+(\d{1,2})\s*meses?\b/);
+  if (match) {
+    const maxMonths = Number(match[1]);
+    return { maxMonths, label: `com último atendimento nos últimos ${maxMonths} meses` };
+  }
+
+  match = text.match(/\b(\d{1,2})\s*meses?\s+(?:sem atendimento|sem visita|sem contato)\b/);
+  if (match) {
+    const minMonths = Number(match[1]);
+    return { minMonths, label: `há pelo menos ${minMonths} meses sem atendimento` };
+  }
+
+  return null;
+}
+
+function matchesRequestedPeriod(date: string | null | undefined, period: RetentionPeriod | null) {
+  if (!period) return true;
+  if (!date) return false;
+  const months = monthsWithoutService(date);
+  if (period.minMonths != null && months < period.minMonths) return false;
+  if (period.maxMonths != null && months > period.maxMonths) return false;
+  return true;
+}
+
+function stripPeriodFromMessage(message: string) {
+  return message
+    .replace(/\b(?:entre|de)\s+\d{1,2}\s*(?:e|a|[-–—])\s*\d{1,2}\s*meses?\b/gi, ' ')
+    .replace(/\b\d{1,2}\s*(?:a|[-–—])\s*\d{1,2}\s*meses?\b/gi, ' ')
+    .replace(/(?:\+|mais de|acima de|superior a|há mais de|ha mais de)\s*\d{1,2}\s*meses?/gi, ' ')
+    .replace(/\b(?:últimos?|ultimos?|nos últimos?|nos ultimos?|dos últimos?|dos ultimos?|até|ate|no máximo|no maximo)\s+\d{1,2}\s*meses?\b/gi, ' ')
+    .replace(/\b\d{1,2}\s*meses?\s+(?:sem atendimento|sem visita|sem contato)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function cityFromMessage(message: string) {
-  const raw = message.replace(/[?!.,]+$/g, '').trim();
-  const matches = Array.from(raw.matchAll(/\b(?:em|de)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45}?)(?=\s+(?:que|com|para|e|ha|há|mais|sem|inativ|essa|esta|na|no|da|do|onde|durante)\b|$|[?!.,])/gi));
+  const raw = stripPeriodFromMessage(message).replace(/[?!.,]+$/g, '').trim();
+  const matches = Array.from(raw.matchAll(/\b(?:em|de)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45}?)(?=\s+(?:que|com|para|e|ha|há|mais|sem|inativ|essa|esta|na|no|da|do|onde|durante|ultimo|último)\b|$|[?!.,])/gi));
   if (matches.length) return matches[matches.length - 1][1].trim();
 
   const compact = raw.match(/\bclientes?\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45})$/i)?.[1]?.trim();
@@ -134,6 +194,7 @@ function isCityProspectIntent(message: string) {
 async function suggestRetentionClientsByCity(message: string, user: AppUser): Promise<ArIAReply> {
   const city = cityFromMessage(message);
   const count = requestedCount(message, 3);
+  const period = requestedPeriod(message);
   if (!city) return { text: 'Me diga a cidade para eu buscar clientes na Retenção.' };
 
   const [{ data: rows, error }, { data: openFollowups }] = await Promise.all([
@@ -142,7 +203,7 @@ async function suggestRetentionClientsByCity(message: string, user: AppUser): Pr
       .select('client_key,client_name,branch,city,last_service_at,service_count,machine_count')
       .ilike('city', `%${city}%`)
       .order('last_service_at', { ascending: true })
-      .limit(250),
+      .limit(500),
     supabase.from('followups').select('client_name,branch').neq('stage', 'encerrar').limit(1500),
   ]);
 
@@ -153,7 +214,7 @@ async function suggestRetentionClientsByCity(message: string, user: AppUser): Pr
   const unique = new Map<string, any>();
 
   for (const row of rows || []) {
-    if (!row.client_name) continue;
+    if (!row.client_name || !matchesRequestedPeriod(row.last_service_at, period)) continue;
     const key = `${fold(row.client_name)}|${fold(row.branch || '')}`;
     if (open.has(key) || recentlySuppressed(history, key)) continue;
     const current = unique.get(key);
@@ -167,9 +228,10 @@ async function suggestRetentionClientsByCity(message: string, user: AppUser): Pr
   });
 
   const top = ranked.slice(0, count);
+  const periodText = period ? ` ${period.label}` : '';
   if (!top.length) {
     return {
-      text: `Consultei a Retenção de ${city}, mas não encontrei novos clientes livres para sugerir agora. Desconsiderei quem já possui Follow-up aberto, quem foi sugerido nos últimos 7 dias e quem foi ignorado recentemente.`,
+      text: `Consultei a Retenção de ${city}${periodText}, mas não encontrei novos clientes livres para sugerir agora. Desconsiderei quem já possui Follow-up aberto, quem foi sugerido nos últimos 7 dias e quem foi ignorado recentemente.`,
     };
   }
 
@@ -191,7 +253,7 @@ async function suggestRetentionClientsByCity(message: string, user: AppUser): Pr
   ];
 
   return {
-    text: `Consultei a Retenção de ${top[0]?.city || city} e selecionei ${top.length} cliente(s) para você avaliar para Follow-up. Priorizei maior tempo sem atendimento e histórico de atendimento, e deixei de fora quem já tem tratativa aberta ou foi sugerido recentemente.\n\n${lines.join('\n\n')}\n\nEsses clientes ainda não foram adicionados ao Follow-up; escolha abaixo se deseja prospectar todos ou ignorar esta sugestão.`,
+    text: `Consultei a Retenção de ${top[0]?.city || city}${period ? `, filtrando clientes ${period.label}` : ''}, e selecionei ${top.length} cliente(s) para você avaliar para Follow-up. Priorizei maior tempo sem atendimento dentro do período pedido e histórico de atendimento, e deixei de fora quem já tem tratativa aberta ou foi sugerido recentemente.\n\n${lines.join('\n\n')}\n\nEsses clientes ainda não foram adicionados ao Follow-up; escolha abaixo se deseja prospectar todos ou ignorar esta sugestão.`,
     actions: actions as ArIAAction[],
   };
 }
