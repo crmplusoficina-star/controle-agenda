@@ -9,63 +9,79 @@ import exp4 from '../tutorial/exp4';
 import { supabase } from '../lib/supabase';
 import './tutorial.css';
 
+type TutorialTarget = {
+  scope?: string;
+  text: string;
+};
+
 type TutorialStep = {
   title: string;
   text: string;
-  screen?: 'agenda' | 'retencao-lista' | 'retencao-mapa' | 'followup-ativo' | 'followup-agenda' | 'followup-historico';
+  target?: TutorialTarget;
+  action?: string;
+};
+
+type TargetRect = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
 };
 
 const embeddedImages = [exp1, exp2, exp3, exp4] as const;
 
 const steps: TutorialStep[] = [
   { title: 'Boas-vindas', text: 'Olá, [nome]! Eu sou a ArIA e vou te auxiliar na programação dos atendimentos, com rotas, ideias e outras informações importantes.' },
-  { title: 'Tela de Agenda', text: 'Esta é a sua agenda de atendimentos. Aqui, você organiza seu cronograma e pode alternar entre as visões semanal e mensal, além de visualizar suas filiais e demais unidades.', screen: 'agenda' },
-  { title: 'Agenda · filiais e técnicos', text: 'Você também pode selecionar outras filiais, adicionar um técnico já cadastrado ou cadastrar um novo técnico.', screen: 'agenda' },
-  { title: 'Tela de Retenção', text: 'Aqui você consulta o histórico de atendimentos dos últimos 5 anos. Cada círculo e cor representa o período desde o último atendimento, conforme indicado na legenda. Clique em um ícone para visualizar os clientes daquele período.', screen: 'retencao-lista' },
-  { title: 'Filtros da Retenção', text: 'Nas colunas, você pode aplicar filtros, selecionar mais de um item, digitar para pesquisar, confirmar a seleção ou limpar o filtro.', screen: 'retencao-lista' },
-  { title: 'Visualização por mapa', text: 'Você também pode visualizar essas informações pelo mapa.', screen: 'retencao-mapa' },
-  { title: 'Mapa de Retenção', text: 'No canto superior, a legenda mostra o significado de cada ícone e cor exibidos no mapa.', screen: 'retencao-mapa' },
-  { title: 'Rotas dos técnicos', text: 'Cada agendamento também aparece no mapa, de acordo com a localização cadastrada do cliente. A rota do técnico será exibida e, ao passar o cursor sobre o trajeto, você poderá visualizar a distância em quilômetros e o tempo estimado entre um cliente e outro.', screen: 'retencao-mapa' },
-  { title: 'Corrigir localização', text: 'Caso a localização cadastrada não corresponda à realidade, você pode ativar o modo de edição e arrastar o cliente para a posição correta. Depois, é possível desfazer, cancelar ou confirmar a alteração.', screen: 'retencao-mapa' },
-  { title: 'Registrar contato pelo mapa', text: 'Pelo mapa, clique no ícone do cliente e depois em Follow-up. Não é necessário preencher nenhuma informação nesse momento: basta salvar para adicionar o cliente à sua lista de prospecção.', screen: 'retencao-mapa' },
-  { title: 'Registrar contato pela lista', text: 'Você também pode voltar para a visualização em lista e pesquisar pelo nome do cliente ou pela cidade. Depois, clique em Criar tratativa e salve para adicionar o cliente aos contatos de prospecção.', screen: 'retencao-lista' },
-  { title: 'Tela de Follow-up', text: 'Na aba Em andamento, você encontra os clientes selecionados para prospecção por meio da opção Criar tratativa.', screen: 'followup-ativo' },
-  { title: 'Etapa da oportunidade', text: 'Na coluna Etapa, você visualiza o status atual de cada oportunidade. Clique sobre o status para acessar os detalhes da oportunidade.', screen: 'followup-ativo' },
-  { title: 'Atualizações da oportunidade', text: 'Os status são atualizados automaticamente conforme as informações são preenchidas. Você também pode adicionar observações e informar o valor da oportunidade.', screen: 'followup-ativo' },
-  { title: 'Programar o próximo contato', text: 'Também é possível organizar uma agenda para entrar em contato com o cliente ou programar futuras visitas.', screen: 'followup-ativo' },
-  { title: 'Agenda de Follow-up', text: 'Aqui você visualiza os clientes e as datas programadas para contato ou visita. Também pode adicionar informações e lembretes.', screen: 'followup-agenda' },
-  { title: 'Histórico de vendas', text: 'Após uma oportunidade ser marcada como Venda ganha ou Venda perdida, ela é enviada automaticamente para o Histórico de vendas, onde você poderá consultar e filtrar as informações.', screen: 'followup-historico' },
+  { title: 'Tela de Agenda', text: 'Esta é a sua agenda de atendimentos. Aqui, você organiza seu cronograma e pode alternar entre as visões semanal e mensal, além de visualizar suas filiais e demais unidades.', target: { scope: '.sidebar', text: 'Agenda' }, action: 'Clique em Agenda no menu lateral para continuar.' },
+  { title: 'Agenda · filiais e técnicos', text: 'Você também pode selecionar outras filiais, adicionar um técnico já cadastrado ou cadastrar um novo técnico.' },
+  { title: 'Tela de Retenção', text: 'Aqui você consulta o histórico de atendimentos dos últimos 5 anos. Cada círculo e cor representa o período desde o último atendimento, conforme indicado na legenda.', target: { scope: '.sidebar', text: 'Retenção' }, action: 'Agora clique em Retenção no menu lateral.' },
+  { title: 'Filtros da Retenção', text: 'Nas colunas, você pode aplicar filtros, selecionar mais de um item, digitar para pesquisar, confirmar a seleção ou limpar o filtro.', target: { scope: '.retention-head', text: 'Cliente' }, action: 'Clique no cabeçalho Cliente para abrir um filtro.' },
+  { title: 'Visualização por mapa', text: 'Você também pode visualizar essas informações pelo mapa.', target: { scope: '.retention-view-switch', text: 'Mapa' }, action: 'Clique em Mapa para trocar a visualização.' },
+  { title: 'Mapa de Retenção', text: 'No canto superior, a legenda mostra o significado de cada ícone e cor exibidos no mapa.' },
+  { title: 'Rotas dos técnicos', text: 'Cada agendamento também aparece no mapa, de acordo com a localização cadastrada do cliente. A rota do técnico será exibida e, ao passar o cursor sobre o trajeto, você poderá visualizar a distância em quilômetros e o tempo estimado entre um cliente e outro.' },
+  { title: 'Corrigir localização', text: 'Caso a localização cadastrada não corresponda à realidade, você pode ativar o modo de edição e arrastar o cliente para a posição correta. Depois, é possível desfazer, cancelar ou confirmar a alteração.' },
+  { title: 'Registrar contato pelo mapa', text: 'Pelo mapa, clique no ícone do cliente e depois em Follow-up. Não é necessário preencher nenhuma informação nesse momento: basta salvar para adicionar o cliente à sua lista de prospecção.' },
+  { title: 'Registrar contato pela lista', text: 'Você também pode voltar para a visualização em lista e pesquisar pelo nome do cliente ou pela cidade. Depois, clique em Criar tratativa e salve para adicionar o cliente aos contatos de prospecção.', target: { scope: '.retention-view-switch', text: 'Lista' }, action: 'Clique em Lista para voltar aos clientes.' },
+  { title: 'Tela de Follow-up', text: 'Na aba Em andamento, você encontra os clientes selecionados para prospecção por meio da opção Criar tratativa.', target: { scope: '.sidebar', text: 'Follow-up' }, action: 'Clique em Follow-up no menu lateral.' },
+  { title: 'Etapa da oportunidade', text: 'Na coluna Etapa, você visualiza o status atual de cada oportunidade. Clique sobre o status para acessar os detalhes da oportunidade.' },
+  { title: 'Atualizações da oportunidade', text: 'Os status são atualizados automaticamente conforme as informações são preenchidas. Você também pode adicionar observações e informar o valor da oportunidade.' },
+  { title: 'Programar o próximo contato', text: 'Também é possível organizar uma agenda para entrar em contato com o cliente ou programar futuras visitas.' },
+  { title: 'Agenda de Follow-up', text: 'Aqui você visualiza os clientes e as datas programadas para contato ou visita. Também pode adicionar informações e lembretes.', target: { scope: '.followup-workspace', text: 'Agenda' }, action: 'Clique em Agenda para ver os próximos contatos.' },
+  { title: 'Histórico de vendas', text: 'Após uma oportunidade ser marcada como Venda ganha ou Venda perdida, ela é enviada automaticamente para o Histórico de vendas, onde você poderá consultar e filtrar as informações.', target: { scope: '.followup-workspace', text: 'Histórico de vendas' }, action: 'Clique em Histórico de vendas para conhecer essa área.' },
   { title: 'Ajuda da ArIA', text: 'Sempre que tiver alguma dúvida, clique no ícone da ArIA e fale comigo. Posso explicar novamente uma funcionalidade ou te levar diretamente até ela.' },
 ];
 
-function clickButton(text: string, scope?: string) {
-  const root = scope ? document.querySelector(scope) : document;
-  if (!root) return false;
-  const buttons = Array.from(root.querySelectorAll('button')) as HTMLButtonElement[];
-  const button = buttons.find((item) => item.textContent?.replace(/\s+/g, ' ').trim() === text)
-    || buttons.find((item) => item.textContent?.replace(/\s+/g, ' ').trim().includes(text));
-  if (!button) return false;
-  button.click();
-  return true;
+function normalizeText(value: string | null | undefined) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function navigateTo(screen?: TutorialStep['screen']) {
-  if (!screen) return;
-  if (screen === 'agenda') {
-    clickButton('Agenda', '.sidebar');
-    return;
-  }
-  if (screen === 'retencao-lista' || screen === 'retencao-mapa') {
-    clickButton('Retenção', '.sidebar');
-    window.setTimeout(() => clickButton(screen === 'retencao-mapa' ? 'Mapa' : 'Lista', '.list-page'), 180);
-    return;
-  }
-  clickButton('Follow-up', '.sidebar');
-  window.setTimeout(() => {
-    if (screen === 'followup-agenda') clickButton('Agenda', '.followup-workspace');
-    else if (screen === 'followup-historico') clickButton('Histórico de vendas', '.followup-workspace');
-    else clickButton('Em andamento', '.followup-workspace');
-  }, 180);
+function resolveTarget(target?: TutorialTarget) {
+  if (!target) return null;
+  const root = target.scope ? document.querySelector(target.scope) : document;
+  if (!root) return null;
+  const elements = Array.from(root.querySelectorAll('button,[role="button"]')) as HTMLElement[];
+  const exact = elements.find((item) => normalizeText(item.textContent) === target.text);
+  return exact || elements.find((item) => normalizeText(item.textContent).includes(target.text)) || null;
+}
+
+function rectFor(element: HTMLElement): TargetRect {
+  const rect = element.getBoundingClientRect();
+  const padding = 7;
+  const left = Math.max(8, rect.left - padding);
+  const top = Math.max(8, rect.top - padding);
+  const right = Math.min(window.innerWidth - 8, rect.right + padding);
+  const bottom = Math.min(window.innerHeight - 8, rect.bottom + padding);
+  return { left, top, right, bottom, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+function sameRect(a: TargetRect | null, b: TargetRect) {
+  return Boolean(a && Math.abs(a.left - b.left) < 1 && Math.abs(a.top - b.top) < 1 && Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1);
+}
+
+function randomImagePlan() {
+  return steps.map(() => Math.floor(Math.random() * embeddedImages.length));
 }
 
 export function TutorialOverlay() {
@@ -75,10 +91,14 @@ export function TutorialOverlay() {
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(0);
   const [failedImages, setFailedImages] = useState<Record<number, boolean>>({});
+  const [imagePlan, setImagePlan] = useState<number[]>(randomImagePlan);
+  const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
+  const [targetMissing, setTargetMissing] = useState(false);
 
   useEffect(() => {
     const restart = () => {
       setIndex(0);
+      setImagePlan(randomImagePlan());
       setOpen(true);
     };
     window.addEventListener('aria:tutorial:start', restart);
@@ -96,6 +116,7 @@ export function TutorialOverlay() {
       window.setTimeout(() => {
         if (!cancelled) {
           setIndex(0);
+          setImagePlan(randomImagePlan());
           setOpen(true);
         }
       }, 650);
@@ -108,16 +129,66 @@ export function TutorialOverlay() {
     };
   }, [storageKey, user.matricula]);
 
+  const step = steps[index];
+
   useEffect(() => {
-    if (open) navigateTo(steps[index]?.screen);
-  }, [open, index]);
+    if (!open || !step?.target) {
+      setTargetRect(null);
+      setTargetMissing(false);
+      return;
+    }
+
+    let currentTarget: HTMLElement | null = null;
+    let clickHandler: (() => void) | null = null;
+    let scrolled = false;
+    setTargetRect(null);
+    setTargetMissing(false);
+
+    const advanceAfterClick = () => {
+      window.setTimeout(() => setIndex((value) => Math.min(steps.length - 1, value + 1)), 90);
+    };
+
+    const syncTarget = () => {
+      const next = resolveTarget(step.target);
+      if (next !== currentTarget) {
+        if (currentTarget && clickHandler) currentTarget.removeEventListener('click', clickHandler);
+        currentTarget = next;
+        clickHandler = null;
+        scrolled = false;
+        if (currentTarget) {
+          clickHandler = advanceAfterClick;
+          currentTarget.addEventListener('click', clickHandler);
+        }
+      }
+      if (!currentTarget) return;
+      if (!scrolled) {
+        currentTarget.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        scrolled = true;
+      }
+      const nextRect = rectFor(currentTarget);
+      setTargetRect((current) => sameRect(current, nextRect) ? current : nextRect);
+      setTargetMissing(false);
+    };
+
+    syncTarget();
+    const interval = window.setInterval(syncTarget, 120);
+    const missingTimer = window.setTimeout(() => {
+      if (!resolveTarget(step.target)) setTargetMissing(true);
+    }, 2500);
+
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(missingTimer);
+      if (currentTarget && clickHandler) currentTarget.removeEventListener('click', clickHandler);
+    };
+  }, [open, index, step]);
 
   if (!open) return null;
-  const step = steps[index];
   const last = index === steps.length - 1;
   const first = index === 0;
+  const guided = Boolean(step.target);
   const text = step.text.replace('[nome]', user.name.split(' ')[0] || user.name);
-  const imageIndex = index % images.length;
+  const imageIndex = imagePlan[index] ?? 0;
 
   async function persistFinished(skipped: boolean) {
     window.localStorage.setItem(storageKey, '1');
@@ -137,11 +208,22 @@ export function TutorialOverlay() {
 
   function repeat() {
     setIndex(0);
-    navigateTo(steps[0].screen);
+    setImagePlan(randomImagePlan());
   }
 
-  return <div className="tutorial-layer" role="dialog" aria-modal="true" aria-label="Tutorial da Agenda Técnica">
-    <div className="tutorial-dim" />
+  function manualAdvance() {
+    setIndex((value) => Math.min(steps.length - 1, value + 1));
+  }
+
+  return <div className={`tutorial-layer ${guided ? 'tutorial-guided' : ''}`} role="dialog" aria-modal="true" aria-label="Tutorial da Agenda Técnica">
+    {guided && targetRect ? <>
+      <div className="tutorial-blocker" style={{ left: 0, top: 0, right: 0, height: targetRect.top }} />
+      <div className="tutorial-blocker" style={{ left: 0, top: targetRect.bottom, right: 0, bottom: 0 }} />
+      <div className="tutorial-blocker" style={{ left: 0, top: targetRect.top, width: targetRect.left, height: targetRect.height }} />
+      <div className="tutorial-blocker" style={{ left: targetRect.right, top: targetRect.top, right: 0, height: targetRect.height }} />
+      <div className="tutorial-focus-ring" style={{ left: targetRect.left, top: targetRect.top, width: targetRect.width, height: targetRect.height }} />
+    </> : <div className="tutorial-dim" />}
+
     <section className={`tutorial-card tutorial-pos-${index % 3}`}>
       <div className="tutorial-aria-side">
         {!failedImages[imageIndex]
@@ -153,10 +235,13 @@ export function TutorialOverlay() {
         <div className="tutorial-topline"><span>Passo {index + 1} de {steps.length}</span><button type="button" onClick={() => finish(true)}><FastForward size={14}/> Pular tutorial</button></div>
         <h2>{step.title}</h2>
         <p>{text}</p>
+        {guided && <div className={`tutorial-action-hint ${targetMissing ? 'is-missing' : ''}`}>
+          <ArrowRight size={16}/><div><strong>{step.action}</strong><span>{targetMissing ? 'Não encontrei esse controle nesta tela. Você pode continuar manualmente.' : 'O tutorial avança automaticamente depois do clique.'}</span></div>
+        </div>}
         <div className="tutorial-progress"><i style={{ width: `${((index + 1) / steps.length) * 100}%` }} /></div>
         <div className="tutorial-actions">
           {!first && !last && <button type="button" className="tutorial-secondary" onClick={() => setIndex((value) => Math.max(0, value - 1))}><ArrowLeft size={15}/> Voltar</button>}
-          {!last && <button type="button" className="tutorial-primary" onClick={() => setIndex((value) => Math.min(steps.length - 1, value + 1))}>Avançar <ArrowRight size={15}/></button>}
+          {!last && (!guided || targetMissing) && <button type="button" className="tutorial-primary" onClick={manualAdvance}>{guided ? 'Continuar' : 'Avançar'} <ArrowRight size={15}/></button>}
           {last && <>
             <button type="button" className="tutorial-secondary" onClick={repeat}><ArrowLeft size={15}/> Repetir tutorial</button>
             <button type="button" className="tutorial-primary" onClick={() => finish(false)}><Check size={15}/> Finalizar tutorial</button>
