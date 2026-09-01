@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
-import { answerArIA, type ArIAAction } from '../lib/ariaBrain';
+import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
+import { answerSmartArIA, learnCorrectionResilient } from '../lib/ariaSmart';
 import { useEmbeddedImage } from '../lib/ariaImages';
 import exp1 from '../tutorial/exp1';
 import './aria-widget.css';
@@ -50,6 +51,8 @@ export function ArIAWidget() {
   const suppressClickRef = useRef(false);
   const nextId = useRef(2);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const lastQuestionRef = useRef('');
+  const lastAnswerRef = useRef('');
 
   function beginDrag(event: React.PointerEvent<HTMLElement>) {
     if ((event.target as HTMLElement).closest('button,input,textarea')) return;
@@ -116,7 +119,7 @@ export function ArIAWidget() {
       return;
     }
     if (!action.view) return;
-    const labels: Record<string, string> = { inicio: 'Início', agenda: 'Agenda', retencao: 'Retenção', followup: 'Follow-up' };
+    const labels: Record<string, string> = { inicio: 'Início', agenda: 'Agenda', retencao: 'Retenção', followup: 'Follow-up', dashboard: 'Dashboard' };
     clickButton(labels[action.view], '.sidebar');
     window.setTimeout(() => {
       if (action.view === 'retencao' && action.mode) clickButton(action.mode === 'map' ? 'Mapa' : 'Lista', '.list-page');
@@ -137,7 +140,28 @@ export function ArIAWidget() {
     setBusy(true);
     scrollBottom();
     try {
-      const reply = await answerArIA(value, user);
+      let reply;
+      if (isArIACorrection(value) && lastQuestionRef.current) {
+        const learned = await learnCorrectionResilient(lastQuestionRef.current, lastAnswerRef.current, value, user);
+        const applied = await answerSmartArIA(`${lastQuestionRef.current}. ${value}`);
+        if (applied) {
+          reply = {
+            ...applied,
+            text: `${learned.sharedSaved ? 'Entendi e registrei essa correção para pedidos semelhantes.' : 'Entendi e registrei essa correção neste dispositivo; vou considerar daqui em diante.'}\n\n${applied.text}`,
+          };
+        } else {
+          reply = {
+            text: learned.sharedSaved
+              ? 'Entendi e registrei a correção para pedidos semelhantes. Vou usar essa orientação nas próximas interpretações.'
+              : 'Entendi e guardei a correção neste dispositivo. O registro compartilhado está indisponível agora, mas não vou descartar o que você me ensinou nesta sessão.',
+          };
+        }
+      } else {
+        reply = await answerSmartArIA(value) || await answerArIA(value, user);
+        lastQuestionRef.current = value;
+        lastAnswerRef.current = reply.text;
+      }
+
       setMessages((current) => [...current, { id: nextId.current++, role: 'aria', text: reply.text, actions: reply.actions }]);
       if (value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes('tutorial')) {
         window.setTimeout(() => window.dispatchEvent(new CustomEvent('aria:tutorial:start')), 220);
