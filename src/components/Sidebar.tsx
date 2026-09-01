@@ -1,18 +1,23 @@
-import { BarChart3, CalendarRange, History, House, ListTodo } from 'lucide-react';
+import { BarChart3, CalendarRange, History, House, ListTodo, UsersRound } from 'lucide-react';
 import type { ViewName } from '../types';
 import { useSession } from '../session';
 
-const items: { id: ViewName; label: string; icon: typeof CalendarRange; managerOnly?: boolean }[] = [
+const items: { id: ViewName; label: string; icon: typeof CalendarRange; managerOnly?: boolean; adminOnly?: boolean }[] = [
   { id: 'inicio', label: 'Início', icon: House },
   { id: 'agenda', label: 'Agenda', icon: CalendarRange },
   { id: 'retencao', label: 'Retenção', icon: History },
   { id: 'followup', label: 'Follow-up', icon: ListTodo },
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3, managerOnly: true },
+  { id: 'usuarios', label: 'Usuários e acessos', icon: UsersRound, adminOnly: true },
 ];
 
 export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewName) => void }) {
   const { user } = useSession();
-  const visibleItems = items.filter((item) => !item.managerOnly || user.role === 'gestor' || user.role === 'admin');
+  const visibleItems = items.filter((item) => {
+    if (item.adminOnly) return user.role === 'admin';
+    if (item.managerOnly) return user.role === 'gestor' || user.role === 'admin';
+    return true;
+  });
   return (
     <aside className="sidebar">
       <div className="brand brand-image-wrap">
