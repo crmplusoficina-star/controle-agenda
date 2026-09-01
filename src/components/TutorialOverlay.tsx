@@ -1,11 +1,12 @@
-import { ArrowLeft, ArrowRight, Check, FastForward } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, FastForward, Bot } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSession } from '../session';
-import { supabase } from '../lib/supabase';
+import { useEmbeddedImages } from '../lib/ariaImages';
 import exp1 from '../tutorial/exp1';
 import exp2 from '../tutorial/exp2';
 import exp3 from '../tutorial/exp3';
 import exp4 from '../tutorial/exp4';
+import { supabase } from '../lib/supabase';
 import './tutorial.css';
 
 type TutorialStep = {
@@ -14,7 +15,8 @@ type TutorialStep = {
   screen?: 'agenda' | 'retencao-lista' | 'retencao-mapa' | 'followup-ativo' | 'followup-agenda' | 'followup-historico';
 };
 
-const images = [exp1, exp2, exp3, exp4] as const;
+const embeddedImages = [exp1, exp2, exp3, exp4] as const;
+
 const steps: TutorialStep[] = [
   { title: 'Boas-vindas', text: 'Olá, [nome]! Eu sou a ArIA e vou te auxiliar na programação dos atendimentos, com rotas, ideias e outras informações importantes.' },
   { title: 'Tela de Agenda', text: 'Esta é a sua agenda de atendimentos. Aqui, você organiza seu cronograma e pode alternar entre as visões semanal e mensal, além de visualizar suas filiais e demais unidades.', screen: 'agenda' },
@@ -46,9 +48,13 @@ function clickButton(text: string, scope?: string) {
   button.click();
   return true;
 }
+
 function navigateTo(screen?: TutorialStep['screen']) {
   if (!screen) return;
-  if (screen === 'agenda') { clickButton('Agenda', '.sidebar'); return; }
+  if (screen === 'agenda') {
+    clickButton('Agenda', '.sidebar');
+    return;
+  }
   if (screen === 'retencao-lista' || screen === 'retencao-mapa') {
     clickButton('Retenção', '.sidebar');
     window.setTimeout(() => clickButton(screen === 'retencao-mapa' ? 'Mapa' : 'Lista', '.list-page'), 180);
@@ -64,77 +70,97 @@ function navigateTo(screen?: TutorialStep['screen']) {
 
 export function TutorialOverlay() {
   const { user } = useSession();
-  const storageKey = useMemo(() => `agenda-tecnica:tutorial-complete:v2:${user.matricula}`, [user.matricula]);
+  const images = useEmbeddedImages(embeddedImages);
+  const storageKey = useMemo(() => `agenda-tecnica:tutorial-complete:v1:${user.matricula}`, [user.matricula]);
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(0);
-  const [imageSrc, setImageSrc] = useState<string>(images[0]);
-
-  useEffect(() => setImageSrc(images[index % images.length] || exp1), [index]);
+  const [failedImages, setFailedImages] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: number | null = null;
-    const restart = () => { setIndex(0); setOpen(true); };
+    const restart = () => {
+      setIndex(0);
+      setOpen(true);
+    };
     window.addEventListener('aria:tutorial:start', restart);
 
+    let cancelled = false;
     async function checkSeen() {
       const localSeen = window.localStorage.getItem(storageKey) === '1';
       if (localSeen) return;
       const { data } = await supabase.from('aria_user_state').select('tutorial_completed_at,tutorial_skipped_at').eq('matricula', user.matricula).maybeSingle();
       if (cancelled) return;
-      const remoteSeen = Boolean(data?.tutorial_completed_at || data?.tutorial_skipped_at);
-      if (remoteSeen) {
+      if (data?.tutorial_completed_at || data?.tutorial_skipped_at) {
         window.localStorage.setItem(storageKey, '1');
         return;
       }
-      timer = window.setTimeout(() => {
-        if (!cancelled) { setIndex(0); setOpen(true); }
+      window.setTimeout(() => {
+        if (!cancelled) {
+          setIndex(0);
+          setOpen(true);
+        }
       }, 650);
     }
-    void checkSeen();
+    checkSeen();
+
     return () => {
       cancelled = true;
-      if (timer != null) window.clearTimeout(timer);
       window.removeEventListener('aria:tutorial:start', restart);
     };
   }, [storageKey, user.matricula]);
 
-  useEffect(() => { if (open) navigateTo(steps[index]?.screen); }, [open, index]);
-  if (!open) return null;
+  useEffect(() => {
+    if (open) navigateTo(steps[index]?.screen);
+  }, [open, index]);
 
+  if (!open) return null;
   const step = steps[index];
   const last = index === steps.length - 1;
   const first = index === 0;
   const text = step.text.replace('[nome]', user.name.split(' ')[0] || user.name);
+  const imageIndex = index % images.length;
 
-  async function finish(kind: 'completed' | 'skipped') {
+  async function persistFinished(skipped: boolean) {
     window.localStorage.setItem(storageKey, '1');
-    setOpen(false);
     const now = new Date().toISOString();
     await supabase.from('aria_user_state').upsert({
       matricula: user.matricula,
-      tutorial_completed_at: kind === 'completed' ? now : null,
-      tutorial_skipped_at: kind === 'skipped' ? now : null,
+      tutorial_completed_at: skipped ? null : now,
+      tutorial_skipped_at: skipped ? now : null,
       updated_at: now,
     }, { onConflict: 'matricula' });
   }
-  function repeat() { setIndex(0); navigateTo(steps[0].screen); }
+
+  async function finish(skipped = false) {
+    setOpen(false);
+    await persistFinished(skipped);
+  }
+
+  function repeat() {
+    setIndex(0);
+    navigateTo(steps[0].screen);
+  }
 
   return <div className="tutorial-layer" role="dialog" aria-modal="true" aria-label="Tutorial da Agenda Técnica">
     <div className="tutorial-dim" />
     <section className={`tutorial-card tutorial-pos-${index % 3}`}>
       <div className="tutorial-aria-side">
-        <img src={imageSrc} onError={() => setImageSrc(exp1)} alt="ArIA" />
+        {!failedImages[imageIndex]
+          ? <img src={images[imageIndex]} alt="ArIA" onError={() => setFailedImages((current) => ({ ...current, [imageIndex]: true }))} />
+          : <div className="tutorial-aria-fallback"><Bot size={34}/><strong>ArIA</strong></div>}
         <span>ArIA</span>
       </div>
       <div className="tutorial-copy">
-        <div className="tutorial-topline"><span>Passo {index + 1} de {steps.length}</span><button type="button" onClick={() => void finish('skipped')}><FastForward size={14}/> Pular tutorial</button></div>
-        <h2>{step.title}</h2><p>{text}</p>
+        <div className="tutorial-topline"><span>Passo {index + 1} de {steps.length}</span><button type="button" onClick={() => finish(true)}><FastForward size={14}/> Pular tutorial</button></div>
+        <h2>{step.title}</h2>
+        <p>{text}</p>
         <div className="tutorial-progress"><i style={{ width: `${((index + 1) / steps.length) * 100}%` }} /></div>
         <div className="tutorial-actions">
           {!first && !last && <button type="button" className="tutorial-secondary" onClick={() => setIndex((value) => Math.max(0, value - 1))}><ArrowLeft size={15}/> Voltar</button>}
           {!last && <button type="button" className="tutorial-primary" onClick={() => setIndex((value) => Math.min(steps.length - 1, value + 1))}>Avançar <ArrowRight size={15}/></button>}
-          {last && <><button type="button" className="tutorial-secondary" onClick={repeat}><ArrowLeft size={15}/> Repetir tutorial</button><button type="button" className="tutorial-primary" onClick={() => void finish('completed')}><Check size={15}/> Finalizar tutorial</button></>}
+          {last && <>
+            <button type="button" className="tutorial-secondary" onClick={repeat}><ArrowLeft size={15}/> Repetir tutorial</button>
+            <button type="button" className="tutorial-primary" onClick={() => finish(false)}><Check size={15}/> Finalizar tutorial</button>
+          </>}
         </div>
       </div>
     </section>
