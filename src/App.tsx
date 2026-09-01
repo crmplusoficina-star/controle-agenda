@@ -7,9 +7,11 @@ import { TechnicianDrawer } from './components/TechnicianDrawer';
 import { FollowupDrawer } from './components/FollowupDrawer';
 import { InsightsDrawer } from './components/InsightsDrawer';
 import { ClientDetailDrawer } from './components/ClientDetailDrawer';
+import { HomeView } from './features/HomeView';
 import { AgendaView } from './features/AgendaView';
 import { RetentionView } from './features/RetentionView';
 import { FollowupView } from './features/FollowupView';
+import { DashboardView } from './features/DashboardView';
 import { supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
 import { emptyAppointment, emptyFollowup } from './drafts';
@@ -125,7 +127,7 @@ export default function App() {
   useEffect(() => { loadInsights(); }, [loadInsights]);
 
   useEffect(() => {
-    if (view !== 'retencao' || !branches.length) return;
+    if (!['retencao', 'agenda', 'dashboard'].includes(view) || !branches.length) return;
     let cancelled = false;
     const branchFilter = effectiveBranchValues(branch, branches);
 
@@ -223,7 +225,7 @@ export default function App() {
   }, [branch, branches]);
 
   useEffect(() => {
-    if (view === 'followup') void loadFollowups();
+    if (view === 'followup' || view === 'inicio' || view === 'dashboard') void loadFollowups();
   }, [view, loadFollowups]);
 
   async function searchMachines(term: string, limit = 12) {
@@ -292,6 +294,18 @@ export default function App() {
       billing_status: item.billing_status,
     });
     if (item.equipment_serial) searchMachines(item.equipment_serial, 1).then((rows) => rows[0] && selectMachine(rows[0]));
+  }
+
+  function openHomeAppointment(item: Appointment) {
+    const date = new Date(`${item.appointment_date}T12:00:00`);
+    setWeekStart(startOfWeek(date));
+    setView('agenda');
+    openEdit(item);
+  }
+
+  function openHomeFollowup(item: Followup) {
+    setView('followup');
+    openFollowup(item);
   }
 
   async function triggerInsights(appointmentId: string, technicianId: string) {
@@ -470,7 +484,7 @@ export default function App() {
 
     setFollowupDraft(null);
     setFollowupError('');
-    if (view === 'followup') await loadFollowups();
+    if (view === 'followup' || view === 'inicio' || view === 'dashboard') await loadFollowups();
   }
 
   async function feedbackInsight(id: string, status: 'viewed' | 'ignored' | 'useful') {
@@ -478,19 +492,26 @@ export default function App() {
     await loadInsights();
   }
 
+  function changeView(next: ViewName) {
+    if (next === 'inicio') setWeekStart(startOfWeek());
+    setView(next);
+  }
+
   return <div className="app-shell">
-    <Sidebar view={view} onView={setView} />
+    <Sidebar view={view} onView={changeView} />
     <div className="workspace">
       <Topbar view={view} branches={branches} branch={branch} onBranch={setBranch} insights={insights} onBell={() => setShowInsights(true)} />
       <main className="content">
-        {view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(date) => setWeekStart(startOfWeek(date))} technicians={technicians} appointments={appointments} loading={agendaLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} />}
+        {view === 'inicio' && <HomeView appointments={appointments} technicians={technicians} followups={followups} loading={agendaLoading || followupLoading} consultantName={user.name} consultantMatricula={user.matricula} onAppointment={openHomeAppointment} onFollowup={openHomeFollowup} />}
+        {view === 'agenda' && <AgendaView weekStart={weekStart} onWeek={(date) => setWeekStart(startOfWeek(date))} technicians={technicians} appointments={appointments} clients={clients} serialsByClient={retentionSerials} loading={agendaLoading || retentionLoading} onNew={openNew} onEdit={openEdit} onAddTechnician={() => setShowTechnician(true)} onOpenClient={openClient} onFollowup={(client) => { void newFollowup(client); }} onSchedule={scheduleFromRetention} />}
         {view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} appointments={appointments} technicians={technicians} weekStart={weekStart} onFollowup={(client) => { void newFollowup(client); }} onOpen={openClient} onSchedule={scheduleFromRetention} />}
         {view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => { void newFollowup(); }} onEdit={openFollowup} />}
+        {view === 'dashboard' && <DashboardView branches={branches} followups={followups} appointments={appointments} clients={clients} />}
       </main>
     </div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />
     <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} onName={setTechName} onBranch={setTechBranch} onClose={() => setShowTechnician(false)} onSubmit={addTechnician} />
-    <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} />
+    <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} onCreateFollowup={(client) => { setClientDetail(null); void newFollowup(client); }} />
     <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} error={followupError} onClose={() => { setFollowupDraft(null); setFollowupError(''); }} onSubmit={saveFollowup} />
     <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
   </div>;

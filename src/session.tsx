@@ -87,7 +87,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   if (!value) {
     return <main className="login-screen">
       <section className="login-card">
-        <div className="login-brand-mark">A</div>
+        <div className="login-brand-image-wrap">
+          <img className="login-brand-image" src="/agenda-brand.svg?v=20260831-4" alt="Agenda" />
+        </div>
         <div className="login-copy">
           <h1>Agenda Técnica</h1>
           <p>Retenção de atendimentos</p>
