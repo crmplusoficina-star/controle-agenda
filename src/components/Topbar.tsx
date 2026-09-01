@@ -9,6 +9,7 @@ const titles: Record<ViewName, { title: string; subtitle: string }> = {
   agenda: { title: 'Agenda', subtitle: 'Organize o atendimento sem perder o contexto.' },
   retencao: { title: 'Retenção', subtitle: 'Clientes que merecem atenção, sem transformar tudo em oportunidade.' },
   followup: { title: 'Follow-up', subtitle: 'Retornos e oportunidades em uma fila simples.' },
+  dashboard: { title: 'Dashboard', subtitle: 'Desempenho comercial, retenção, oportunidades e leitura gerencial.' },
 };
 
 const MULTI_SEPARATOR = '||';
