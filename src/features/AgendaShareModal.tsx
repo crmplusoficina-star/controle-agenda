@@ -42,63 +42,56 @@ function formatDay(date: Date) {
 
 function buildAgendaSvg(weekStart: Date, rows: ShareRow[], branchLabel: string) {
   const days = Array.from({ length: 6 }, (_, index) => addDays(weekStart, index));
-  const width = 1600;
-  const margin = 36;
-  const contentWidth = width - margin * 2;
-  const titleHeight = 108;
-  const columnHeight = 38;
-  const dayHeight = 38;
-  const rowHeight = 58;
-  const footerHeight = 34;
   const rowsByDate = new Map(days.map((day) => [isoDate(day), rows.filter((row) => row.date === isoDate(day))]));
   const visibleDays = days.filter((day) => (rowsByDate.get(isoDate(day)) || []).length > 0);
-  const bodyHeight = visibleDays.reduce((sum, day) => sum + dayHeight + (rowsByDate.get(isoDate(day)) || []).length * rowHeight, 0);
-  const height = Math.max(280, margin + titleHeight + columnHeight + bodyHeight + footerHeight + margin);
-  const columns = [
-    { label: 'Técnico', x: margin, width: 220 },
-    { label: 'Cliente', x: margin + 220, width: 410 },
-    { label: 'Cidade', x: margin + 630, width: 220 },
-    { label: 'Tipo de atendimento', x: margin + 850, width: 330 },
-    { label: 'Série', x: margin + 1180, width: contentWidth - 1180 },
-  ];
 
-  let y = margin;
+  const margin = 30;
+  const gap = 16;
+  const cardWidth = 310;
+  const titleHeight = 108;
+  const dayHeaderHeight = 42;
+  const itemHeight = 104;
+  const cardPadding = 12;
+  const footerHeight = 34;
+  const visibleCount = Math.max(visibleDays.length, 1);
+  const width = Math.max(1400, margin * 2 + visibleCount * cardWidth + Math.max(0, visibleCount - 1) * gap);
+  const contentWidth = width - margin * 2;
+  const tallestRows = Math.max(1, ...visibleDays.map((day) => (rowsByDate.get(isoDate(day)) || []).length));
+  const cardsHeight = dayHeaderHeight + cardPadding * 2 + tallestRows * itemHeight;
+  const height = margin + titleHeight + 18 + cardsHeight + footerHeight + margin;
+
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     '<rect width="100%" height="100%" fill="#ffffff"/>',
-    `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${titleHeight}" rx="18" fill="#101827"/>`,
-    `<text x="${margin + 28}" y="${y + 35}" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#ffffff">Agenda da semana</text>`,
-    `<text x="${margin + 28}" y="${y + 65}" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#e2e8f0">Filial: ${escapeXml(branchLabel)}</text>`,
-    `<text x="${margin + 28}" y="${y + 91}" font-family="Arial, sans-serif" font-size="16" fill="#cbd5e1">${escapeXml(shortDate.format(weekStart))} — ${escapeXml(shortDate.format(addDays(weekStart, 5)))}</text>`,
+    `<rect x="${margin}" y="${margin}" width="${contentWidth}" height="${titleHeight}" rx="18" fill="#101827"/>`,
+    `<text x="${margin + 24}" y="${margin + 35}" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#ffffff">Agenda da semana</text>`,
+    `<text x="${margin + 24}" y="${margin + 65}" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#e2e8f0">Filial: ${escapeXml(branchLabel)}</text>`,
+    `<text x="${margin + 24}" y="${margin + 91}" font-family="Arial, sans-serif" font-size="16" fill="#cbd5e1">${escapeXml(shortDate.format(weekStart))} — ${escapeXml(shortDate.format(addDays(weekStart, 5)))}</text>`,
   ];
 
-  y += titleHeight + 14;
-  parts.push(`<rect x="${margin}" y="${y}" width="${contentWidth}" height="${columnHeight}" rx="9" fill="#eff4fb"/>`);
-  columns.forEach((column) => {
-    parts.push(`<text x="${column.x + 14}" y="${y + 25}" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#475569">${column.label}</text>`);
-  });
-  y += columnHeight + 8;
+  const cardsTop = margin + titleHeight + 18;
 
-  visibleDays.forEach((day) => {
+  visibleDays.forEach((day, dayIndex) => {
     const dayRows = rowsByDate.get(isoDate(day)) || [];
-    parts.push(`<rect x="${margin}" y="${y}" width="${contentWidth}" height="${dayHeight}" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>`);
-    parts.push(`<text x="${margin + 14}" y="${y + 25}" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#172033">${escapeXml(formatDay(day))}</text>`);
-    y += dayHeight;
+    const x = margin + dayIndex * (cardWidth + gap);
+    const cardHeight = dayHeaderHeight + cardPadding * 2 + dayRows.length * itemHeight;
+
+    parts.push(`<rect x="${x}" y="${cardsTop}" width="${cardWidth}" height="${cardHeight}" rx="14" fill="#f8fafc" stroke="#dbe3ee"/>`);
+    parts.push(`<rect x="${x}" y="${cardsTop}" width="${cardWidth}" height="${dayHeaderHeight}" rx="14" fill="#eff4fb"/>`);
+    parts.push(`<text x="${x + 16}" y="${cardsTop + 27}" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#172033">${escapeXml(formatDay(day))}</text>`);
 
     dayRows.forEach((row, index) => {
-      const fill = index % 2 === 0 ? '#ffffff' : '#fbfcfe';
-      parts.push(`<rect x="${margin}" y="${y}" width="${contentWidth}" height="${rowHeight}" fill="${fill}" stroke="#edf1f5"/>`);
-      parts.push(`<text x="${columns[0].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#172033">${escapeXml(cut(row.technician, 23))}</text>`);
-      parts.push(`<text x="${columns[1].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#334155">${escapeXml(cut(row.client, 40))}</text>`);
-      parts.push(`<text x="${columns[2].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#475569">${escapeXml(cut(row.city, 22))}</text>`);
-      parts.push(`<text x="${columns[3].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#334155">${escapeXml(cut(row.reason, 31))}</text>`);
-      parts.push(`<text x="${columns[4].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#475569">${escapeXml(cut(row.serial, 30))}</text>`);
-      y += rowHeight;
+      const itemY = cardsTop + dayHeaderHeight + cardPadding + index * itemHeight;
+      parts.push(`<rect x="${x + 10}" y="${itemY}" width="${cardWidth - 20}" height="${itemHeight - 8}" rx="10" fill="#ffffff" stroke="#e7edf4"/>`);
+      parts.push(`<text x="${x + 22}" y="${itemY + 21}" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#172033">${escapeXml(cut(row.technician, 22))}</text>`);
+      parts.push(`<text x="${x + 22}" y="${itemY + 42}" font-family="Arial, sans-serif" font-size="14" fill="#334155">${escapeXml(cut(row.client, 34))}</text>`);
+      parts.push(`<text x="${x + 22}" y="${itemY + 61}" font-family="Arial, sans-serif" font-size="12.5" fill="#64748b">${escapeXml(cut(row.city, 28))}</text>`);
+      parts.push(`<text x="${x + 22}" y="${itemY + 79}" font-family="Arial, sans-serif" font-size="12.5" fill="#475569">${escapeXml(cut(row.reason, 31))}</text>`);
+      parts.push(`<text x="${x + 22}" y="${itemY + 95}" font-family="Arial, sans-serif" font-size="11.5" fill="#64748b">${escapeXml(cut(row.serial, 31))}</text>`);
     });
-    y += 8;
   });
 
-  parts.push(`<text x="${margin}" y="${height - 28}" font-family="Arial, sans-serif" font-size="12" fill="#94a3b8">Gerado pela Agenda Técnica</text>`);
+  parts.push(`<text x="${margin}" y="${height - 18}" font-family="Arial, sans-serif" font-size="12" fill="#94a3b8">Gerado pela Agenda Técnica</text>`);
   parts.push('</svg>');
   return { svg: parts.join(''), width, height };
 }
@@ -292,15 +285,24 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
           <div className="agenda-share-section-title"><div><strong>Prévia da agenda</strong><span>Técnico, cliente, cidade, tipo e série do equipamento.</span></div></div>
           <div className="agenda-share-preview">
             <div className="agenda-share-preview-brand"><strong>Agenda da semana · {branchLabel}</strong><span>{shortDate.format(shareWeekStart)} — {shortDate.format(addDays(shareWeekStart, 5))}</span></div>
-            {rows.length === 0 ? <div className="agenda-share-empty agenda-share-empty-preview">Nenhum atendimento com cliente associado nesta semana.</div> : days.map((day) => {
-              const dayRows = rows.filter((row) => row.date === isoDate(day));
-              if (!dayRows.length) return null;
-              return <div className="agenda-share-day" key={isoDate(day)}>
-                <div className="agenda-share-day-title">{formatDay(day)}</div>
-                <div className="agenda-share-table-head"><span>Técnico</span><span>Cliente</span><span>Cidade</span><span>Tipo</span><span>Série</span></div>
-                {dayRows.map((row, index) => <div className="agenda-share-table-row" key={`${row.date}-${row.technician}-${row.client}-${index}`}><strong>{row.technician}</strong><span>{row.client}</span><span>{row.city}</span><span>{row.reason}</span><span>{row.serial}</span></div>)}
-              </div>;
-            })}
+            {rows.length === 0 ? <div className="agenda-share-empty agenda-share-empty-preview">Nenhum atendimento com cliente associado nesta semana.</div> : <div className="agenda-share-days-grid">
+              {days.map((day) => {
+                const dayRows = rows.filter((row) => row.date === isoDate(day));
+                if (!dayRows.length) return null;
+                return <div className="agenda-share-day-card" key={isoDate(day)}>
+                  <div className="agenda-share-day-card-title">{formatDay(day)}</div>
+                  <div className="agenda-share-day-card-list">
+                    {dayRows.map((row, index) => <div className="agenda-share-day-card-item" key={`${row.date}-${row.technician}-${row.client}-${index}`}>
+                      <strong>{row.technician}</strong>
+                      <span>{row.client}</span>
+                      <small>{row.city}</small>
+                      <small>{row.reason}</small>
+                      <small>{row.serial}</small>
+                    </div>)}
+                  </div>
+                </div>;
+              })}
+            </div>}
           </div>
         </div>
       </div>
