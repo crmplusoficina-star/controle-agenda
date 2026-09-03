@@ -66,9 +66,15 @@ export function DashboardView({ branches, followups, appointments, clients }: {
   const lost = filteredFollowups.filter((item) => item.result === 'venda_perdida');
   const closed = won.length + lost.length;
   const conversion = closed ? won.length / closed : 0;
-  const revenue = won.reduce((sum, item) => sum + saleValue(item), 0);
+  const followupRevenue = won.reduce((sum, item) => sum + saleValue(item), 0);
+  const agendaRevenue = filteredAppointments
+    .filter((item) => item.billing_status === 'faturado')
+    .reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
+  const revenue = followupRevenue + agendaRevenue;
   const opportunityPipeline = open.reduce((sum, item) => sum + opportunityValue(item), 0);
-  const agendaForecast = filteredAppointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
+  const agendaForecast = filteredAppointments
+    .filter((item) => item.billing_status !== 'faturado')
+    .reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
   const activeRetention = filteredClients.filter((item) => ['0-3', '3-6', '6-12'].includes(recencyBucket(item.last_service_at))).length;
   const retentionRate = filteredClients.length ? activeRetention / filteredClients.length : 0;
   const inactive = filteredClients.filter((item) => ['12-18', '18+'].includes(recencyBucket(item.last_service_at))).length;
@@ -98,12 +104,18 @@ export function DashboardView({ branches, followups, appointments, clients }: {
     const rows = filteredFollowups.filter((item) => item.branch === branch.name);
     const branchAppointments = filteredAppointments.filter((item) => item.branch === branch.name);
     const wonRows = rows.filter((item) => item.result === 'venda_ganha');
+    const billedAgenda = branchAppointments
+      .filter((item) => item.billing_status === 'faturado')
+      .reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
+    const pendingAgenda = branchAppointments
+      .filter((item) => item.billing_status !== 'faturado')
+      .reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0);
     return {
       name: branch.name,
       open: rows.filter((item) => item.stage !== 'encerrar').length,
       won: wonRows.length,
-      revenue: wonRows.reduce((sum, item) => sum + saleValue(item), 0),
-      forecast: branchAppointments.reduce((sum, item) => sum + Number(item.forecast_amount || 0), 0),
+      revenue: wonRows.reduce((sum, item) => sum + saleValue(item), 0) + billedAgenda,
+      forecast: pendingAgenda,
     };
   }).filter((row) => !branchFilter.length || branchFilter.includes(row.name)).sort((a, b) => b.revenue - a.revenue || b.forecast - a.forecast), [branches, filteredFollowups, filteredAppointments, branchFilter]);
 
@@ -166,10 +178,10 @@ export function DashboardView({ branches, followups, appointments, clients }: {
     </div>
 
     <div className="dashboard-kpis">
-      <article><span><CircleDollarSign size={17}/> Faturamento</span><strong>{money.format(revenue)}</strong><small>vendas ganhas registradas</small></article>
+      <article><span><CircleDollarSign size={17}/> Faturamento</span><strong>{money.format(revenue)}</strong><small>vendas ganhas e atendimentos faturados</small></article>
       <article><span><Target size={17}/> Oportunidades</span><strong>{money.format(opportunityPipeline)}</strong><small>{open.length} em andamento</small></article>
       <article><span><Gauge size={17}/> Conversão</span><strong>{(conversion * 100).toFixed(1).replace('.', ',')}%</strong><small>{won.length} ganhas · {lost.length} perdidas</small></article>
-      <article><span><BadgeDollarSign size={17}/> Previsão da agenda</span><strong>{money.format(agendaForecast)}</strong><small>semana carregada na Agenda</small></article>
+      <article><span><BadgeDollarSign size={17}/> Previsão da agenda</span><strong>{money.format(agendaForecast)}</strong><small>somente valores ainda não faturados</small></article>
       <article><span><Crosshair size={17}/> Retenção ativa</span><strong>{(retentionRate * 100).toFixed(1).replace('.', ',')}%</strong><small>clientes atendidos em até 12 meses</small></article>
       <article><span><PhoneCall size={17}/> Proatividade hoje</span><strong>{prospectToday} novos</strong><small>{interactionsToday} interações registradas hoje</small></article>
     </div>
@@ -180,7 +192,7 @@ export function DashboardView({ branches, followups, appointments, clients }: {
     </div>
 
     <div className="dashboard-grid two">
-      <article className="dash-panel"><header><div><TrendingDown size={17}/><strong>Vendas perdidas</strong></div><small>motivos registrados</small></header><div className="loss-chart">{lossReasons.length ? lossReasons.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${(item.value / maxLoss) * 100}%` }}/></div><b>{item.value}</b></div>) : <div className="dash-empty">Nenhuma venda perdida no período.</div>}</div></article>
+      <article className="dash-panel"><header><div><TrendingDown size={17}/><strong>Vendas perdidas</strong></div><small>motivos registrados</small></header><div className="loss-chart">{lossReasons.length ? lossReasons.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${(item.value / maxLoss) * 100)}%` }}/></div><b>{item.value}</b></div>) : <div className="dash-empty">Nenhuma venda perdida no período.</div>}</div></article>
       <article className="dash-panel"><header><div><Activity size={17}/><strong>Oportunidades e retenção</strong></div><small>carteira aberta e tempo sem atendimento</small></header><div className="retention-bars">{retentionRecency.map((bucket) => { const count = filteredClients.filter((item) => recencyBucket(item.last_service_at) === bucket.key).length; const pct = filteredClients.length ? count / filteredClients.length : 0; return <div key={bucket.key}><span><i style={{ background: bucket.color }}/>{bucket.label}</span><div><b style={{ width: `${Math.max(2, pct * 100)}%`, background: bucket.color }}/></div><strong>{count}</strong></div>; })}</div></article>
     </div>
 
