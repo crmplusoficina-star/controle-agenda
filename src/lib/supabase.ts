@@ -7,10 +7,9 @@ const primarySupabase = createClient(url, key, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
-// Shared map/location data is canonical in the clean Agenda database. Keep the
-// rest of the operational app on the current project, but route official client
-// coordinates and the retention map context through Agenda so both use the same
-// source of truth.
+// Shared map/location data and reusable client contacts are canonical in the
+// clean Agenda database. Keep the rest of the operational app on the current
+// project, but route these shared relations through Agenda.
 const agendaSupabase = createClient(
   'https://lwowtuspbrnbaukakyss.supabase.co',
   'sb_publishable_ZYYWM9lamdDpgiTMS4en9g_s-k2W9RN',
@@ -21,7 +20,7 @@ const primaryFrom = primarySupabase.from.bind(primarySupabase);
 Object.defineProperty(primarySupabase, 'from', {
   configurable: false,
   writable: false,
-  value: (relation: string) => relation === 'client_location_overrides'
+  value: (relation: string) => ['client_location_overrides', 'client_contacts'].includes(relation)
     ? agendaSupabase.from(relation)
     : primaryFrom(relation),
 });
