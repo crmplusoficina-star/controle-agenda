@@ -192,7 +192,7 @@ export function DashboardView({ branches, followups, appointments, clients }: {
     </div>
 
     <div className="dashboard-grid two">
-      <article className="dash-panel"><header><div><TrendingDown size={17}/><strong>Vendas perdidas</strong></div><small>motivos registrados</small></header><div className="loss-chart">{lossReasons.length ? lossReasons.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${(item.value / maxLoss) * 100)}%` }}/></div><b>{item.value}</b></div>) : <div className="dash-empty">Nenhuma venda perdida no período.</div>}</div></article>
+      <article className="dash-panel"><header><div><TrendingDown size={17}/><strong>Vendas perdidas</strong></div><small>motivos registrados</small></header><div className="loss-chart">{lossReasons.length ? lossReasons.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${(item.value / maxLoss) * 100}%` }}/></div><b>{item.value}</b></div>) : <div className="dash-empty">Nenhuma venda perdida no período.</div>}</div></article>
       <article className="dash-panel"><header><div><Activity size={17}/><strong>Oportunidades e retenção</strong></div><small>carteira aberta e tempo sem atendimento</small></header><div className="retention-bars">{retentionRecency.map((bucket) => { const count = filteredClients.filter((item) => recencyBucket(item.last_service_at) === bucket.key).length; const pct = filteredClients.length ? count / filteredClients.length : 0; return <div key={bucket.key}><span><i style={{ background: bucket.color }}/>{bucket.label}</span><div><b style={{ width: `${Math.max(2, pct * 100)}%`, background: bucket.color }}/></div><strong>{count}</strong></div>; })}</div></article>
     </div>
 
