@@ -58,12 +58,6 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   const waNumber = whatsappNumber(clientContact);
 
   useEffect(() => {
-    if (!draft) return;
-    if (draft.billing_status === 'faturado' || draft.billing_status === 'aguardando_faturamento') return;
-    setDraft({ ...draft, billing_status: 'aguardando_faturamento' });
-  }, [draft?.billing_status]);
-
-  useEffect(() => {
     let cancelled = false;
     if (!contactKey) {
       setClientContact('');
@@ -112,7 +106,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       <div className="hourmeter-block"><div><span>Último horímetro conhecido</span><strong>{lastHourmeter ? `${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h` : 'Sem leitura anterior'}</strong>{lastHourmeter && <small>{new Intl.DateTimeFormat('pt-BR').format(new Date(`${lastHourmeter.reading_date}T12:00:00`))}</small>}</div><label>Horímetro atual da máquina<input inputMode="decimal" value={draft.reported_hourmeter} onChange={(e) => setDraft({ ...draft, reported_hourmeter: e.target.value })} placeholder="Opcional" /></label>{lastHourmeter && draft.reported_hourmeter !== '' && Number(draft.reported_hourmeter) >= lastHourmeter.hourmeter && <div className="hourmeter-delta">+{(Number(draft.reported_hourmeter) - lastHourmeter.hourmeter).toLocaleString('pt-BR')} h</div>}</div>
       <div className="form-grid two">
         <label>Previsão de faturamento<input inputMode="decimal" value={draft.forecast_amount} onChange={(e) => setDraft({ ...draft, forecast_amount: e.target.value })} placeholder="0,00" /></label>
-        <label>Status do faturamento<select value={draft.billing_status === 'faturado' ? 'faturado' : 'aguardando_faturamento'} onChange={(e) => setDraft({ ...draft, billing_status: e.target.value })}><option value="aguardando_faturamento">Pendente</option><option value="faturado">Faturado</option></select></label>
+        <label>Status do faturamento<select value={draft.billing_status === 'faturado' ? 'faturado' : draft.billing_status === 'aguardando_faturamento' ? 'aguardando_faturamento' : 'nao_precificado'} onChange={(e) => setDraft({ ...draft, billing_status: e.target.value })}><option value="nao_precificado">-</option><option value="aguardando_faturamento">Pendente</option><option value="faturado">Faturado</option></select></label>
       </div>
       {formError && <div className="form-error">{formError}</div>}
       <div className="drawer-actions">{draft.id ? <button type="button" className="danger-button" onClick={onDelete}><Trash2 size={16}/> Excluir</button> : <span/>}<button type="button" className="subtle-button" onClick={onClose}>Cancelar</button><button className="primary-button" disabled={saveBusy}>{saveBusy ? <Loader2 className="spin" size={17}/> : <Check size={17}/>} Salvar</button></div>
