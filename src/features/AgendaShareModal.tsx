@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, ExternalLink, Mail, Save, Search, Users, X } from 'lucide-react';
+import { Check, ExternalLink, Mail, Search, Users, X } from 'lucide-react';
 import type { Appointment, Technician } from '../types';
 import { addDays, isoDate, startOfWeek } from '../lib/date';
 import { supabase } from '../lib/supabase';
@@ -144,7 +144,6 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState('');
   const shareWeekStart = useMemo(() => startOfWeek(anchorDate), [anchorDate]);
@@ -198,23 +197,20 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
     setSelectedEmails((current) => current.includes(email) ? current.filter((item) => item !== email) : [...current, email]);
   }
 
-  async function saveDefault(showNotice = true) {
-    setSaving(true);
+  async function saveDefault() {
     const { error } = await supabase.from('agenda_share_user_defaults').upsert({
       matricula: user.matricula,
       recipient_emails: selectedEmails,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'matricula' });
-    setSaving(false);
-    if (showNotice) setNotice(error ? 'Não foi possível salvar a seleção.' : 'Seleção salva como padrão para o seu usuário.');
+    if (error) console.error('agenda_share_default_save_failed', error);
     return !error;
   }
 
   async function openOutlook() {
     if (!selectedEmails.length || !rows.length || opening) return;
     setOpening(true);
-    setNotice('Preparando a agenda...');
-    await saveDefault(false);
+    setNotice('Preparando e copiando a agenda...');
 
     let copied = false;
     try {
@@ -233,13 +229,19 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
       console.error('agenda_share_image_failed', error);
     }
 
+    const saved = await saveDefault();
     const period = `${shortDate.format(shareWeekStart)} a ${shortDate.format(addDays(shareWeekStart, 5))}`;
     const subject = `Agenda atualizada - ${period}`;
     const body = `Olá,\r\n\r\nCompartilho com vocês a agenda atualizada dos colaboradores da regional.\r\n\r\nPeríodo: ${period}.\r\n`;
-    const outlookUrl = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(selectedEmails.join(';'))}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(outlookUrl, '_blank', 'noopener,noreferrer');
-    setNotice(copied ? 'Outlook aberto. A agenda formatada foi copiada para a área de transferência.' : 'Outlook aberto. A imagem da agenda foi baixada para anexar ao e-mail.');
+    const recipientsPath = selectedEmails.map((email) => encodeURIComponent(email)).join(';');
+    const mailtoUrl = `mailto:${recipientsPath}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    setNotice(copied
+      ? `${saved ? 'Destinatários salvos. ' : ''}Agenda copiada. No Outlook, pressione Ctrl+V para inserir a agenda no e-mail.`
+      : `${saved ? 'Destinatários salvos. ' : ''}A imagem da agenda foi baixada. Insira a imagem no e-mail antes de enviar.`);
     setOpening(false);
+
+    window.location.href = mailtoUrl;
   }
 
   if (!open) return null;
@@ -289,8 +291,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
       </div>
 
       <footer className="agenda-share-footer">
-        <div className="agenda-share-notice">{notice || 'A lista escolhida fica salva como padrão para a sua matrícula.'}</div>
-        <button type="button" className="subtle-button" disabled={saving} onClick={() => { void saveDefault(); }}><Save size={15}/>{saving ? 'Salvando...' : 'Salvar padrão'}</button>
+        <div className="agenda-share-notice">{notice || 'Ao abrir o Outlook, a seleção atual fica salva como padrão para a sua matrícula e a agenda é copiada para colar no e-mail.'}</div>
         <button type="button" className="primary-button" disabled={!selectedEmails.length || !rows.length || opening} onClick={() => { void openOutlook(); }}><ExternalLink size={15}/>{opening ? 'Preparando...' : 'Abrir Outlook'}</button>
       </footer>
     </section>
