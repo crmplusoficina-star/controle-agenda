@@ -285,6 +285,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                     onClick={(e) => { e.stopPropagation(); if (!draggedId) onEdit(item); }}
                     title="Arraste para outro dia ou técnico para copiar"
                   >
+                    {item.description && <small title={item.description} style={{ display: 'block', width: '100%', marginBottom: 5, color: '#475569', fontSize: 9, fontWeight: 650, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.description}</small>}
                     <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
                     <span>{item.service_city || 'Cidade não informada'}</span>
                     <small className="appointment-card-reason">{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
