@@ -15,6 +15,7 @@ const monthTitle = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'nume
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 type AgendaRange = 'today' | 'week' | 'fortnight' | 'month';
+type BillingStatus = 'aguardando_faturamento' | 'faturado';
 
 const statusClass: Record<string, string> = {
   planejado: 'status-plan', confirmado: 'status-confirm', em_atendimento: 'status-progress', concluido: 'status-done', cancelado: 'status-cancel',
@@ -79,6 +80,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [copying, setCopying] = useState(false);
+  const [billingBusyId, setBillingBusyId] = useState<string | null>(null);
   const [reasonFilters, setReasonFilters] = useState<string[]>([]);
 
   useEffect(() => {
@@ -216,6 +218,26 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
     setDropTarget(null);
   }
 
+  async function changeBillingStatus(item: Appointment, nextStatus: BillingStatus) {
+    if (billingBusyId === item.id) return;
+    const previousStatus = item.billing_status;
+    const visibleStatus: BillingStatus = previousStatus === 'faturado' ? 'faturado' : 'aguardando_faturamento';
+    if (visibleStatus === nextStatus && previousStatus === nextStatus) return;
+
+    const replaceStatus = (rows: Appointment[], status: string) => rows.map((row) => row.id === item.id ? { ...row, billing_status: status } : row);
+    setBillingBusyId(item.id);
+    setPeriodAppointments((rows) => replaceStatus(rows, nextStatus));
+    setLocalCopies((rows) => replaceStatus(rows, nextStatus));
+
+    const { error } = await supabase.from('appointments').update({ billing_status: nextStatus }).eq('id', item.id);
+    if (error) {
+      setPeriodAppointments((rows) => replaceStatus(rows, previousStatus));
+      setLocalCopies((rows) => replaceStatus(rows, previousStatus));
+      console.error('billing_status_update_failed', error);
+    }
+    setBillingBusyId(null);
+  }
+
   return <div className="agenda-view">
     <div className="agenda-toolbar">
       <div><strong>{title}</strong><span>{visibleAppointments.length} atendimento{visibleAppointments.length === 1 ? '' : 's'} · {money.format(forecast)}{reasonFilters.length ? ` · ${reasonFilters.length} filtro${reasonFilters.length === 1 ? '' : 's'}` : ''}</span></div>
@@ -275,22 +297,38 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                 {allCellItems.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
                   const typeStyle = appointmentTypeStyle(item.service_reason);
                   const hasForecast = Number(item.forecast_amount || 0) > 0;
-                  return <button
-                    key={item.id}
-                    draggable
-                    className={`appointment-card ${statusClass[item.status] || ''} ${draggedId === item.id ? 'copy-dragging' : ''}`}
-                    style={{ background: typeStyle.background, borderLeftColor: typeStyle.color }}
-                    onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('text/plain', item.id); }}
-                    onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
-                    onClick={(e) => { e.stopPropagation(); if (!draggedId) onEdit(item); }}
-                    title="Arraste para outro dia ou técnico para copiar"
-                  >
-                    {item.description && <small title={item.description} style={{ display: 'block', width: '100%', marginBottom: 5, color: '#475569', fontSize: 9, fontWeight: 650, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.description}</small>}
-                    <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
-                    <span>{item.service_city || 'Cidade não informada'}</span>
-                    <small className="appointment-card-reason">{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
-                    {hasForecast && <small className="appointment-card-revenue">Faturamento: <b>{money.format(Number(item.forecast_amount))}</b></small>}
-                  </button>;
+                  const billingStatus: BillingStatus = item.billing_status === 'faturado' ? 'faturado' : 'aguardando_faturamento';
+                  return <div className="appointment-card-wrap" key={item.id}>
+                    <button
+                      draggable
+                      className={`appointment-card ${statusClass[item.status] || ''} ${draggedId === item.id ? 'copy-dragging' : ''}`}
+                      style={{ background: typeStyle.background, borderLeftColor: typeStyle.color }}
+                      onDragStart={(event) => { setDraggedId(item.id); event.dataTransfer.effectAllowed = 'copy'; event.dataTransfer.setData('text/plain', item.id); }}
+                      onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
+                      onClick={(e) => { e.stopPropagation(); if (!draggedId) onEdit(item); }}
+                      title="Arraste para outro dia ou técnico para copiar"
+                    >
+                      {item.description && <small title={item.description} style={{ display: 'block', width: '100%', marginBottom: 5, color: '#475569', fontSize: 9, fontWeight: 650, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.description}</small>}
+                      <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
+                      <span>{item.service_city || 'Cidade não informada'}</span>
+                      <small className="appointment-card-reason">{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
+                      {hasForecast && <small className="appointment-card-revenue">Faturamento: <b>{money.format(Number(item.forecast_amount))}</b></small>}
+                    </button>
+                    <select
+                      className={`appointment-billing-inline ${billingStatus === 'faturado' ? 'is-paid' : 'is-pending'}`}
+                      value={billingStatus}
+                      disabled={billingBusyId === item.id}
+                      draggable={false}
+                      aria-label={`Status do faturamento de ${item.client_name || 'atendimento'}`}
+                      title="Alterar status do faturamento"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) => { event.stopPropagation(); void changeBillingStatus(item, event.target.value as BillingStatus); }}
+                    >
+                      <option value="aguardando_faturamento">Pendente</option>
+                      <option value="faturado">Faturado</option>
+                    </select>
+                  </div>;
                 })}
                 {copying && dropTarget === cellKey && <span className="copying-label">Copiando...</span>}
               </div>;
