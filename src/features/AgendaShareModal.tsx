@@ -155,7 +155,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
   const weekDates = useMemo(() => new Set(Array.from({ length: 6 }, (_, index) => isoDate(addDays(shareWeekStart, index)))), [shareWeekStart]);
   const branchLabel = useMemo(() => {
     const names = Array.from(new Set(technicians.map((item) => String(item.branch || '').trim()).filter(Boolean)));
-    return names.length === 1 ? names[0] : 'Todas';
+    return names.length ? names.join(', ') : 'Todas';
   }, [technicians]);
 
   const rows = useMemo<ShareRow[]>(() => {
