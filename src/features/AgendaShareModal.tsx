@@ -20,6 +20,7 @@ type ShareRow = {
   client: string;
   city: string;
   reason: string;
+  serial: string;
 };
 
 const dateLabel = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
@@ -39,12 +40,12 @@ function formatDay(date: Date) {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
-function buildAgendaSvg(weekStart: Date, rows: ShareRow[]) {
+function buildAgendaSvg(weekStart: Date, rows: ShareRow[], branchLabel: string) {
   const days = Array.from({ length: 6 }, (_, index) => addDays(weekStart, index));
-  const width = 1400;
+  const width = 1600;
   const margin = 36;
   const contentWidth = width - margin * 2;
-  const titleHeight = 92;
+  const titleHeight = 108;
   const columnHeight = 38;
   const dayHeight = 38;
   const rowHeight = 58;
@@ -52,12 +53,13 @@ function buildAgendaSvg(weekStart: Date, rows: ShareRow[]) {
   const rowsByDate = new Map(days.map((day) => [isoDate(day), rows.filter((row) => row.date === isoDate(day))]));
   const visibleDays = days.filter((day) => (rowsByDate.get(isoDate(day)) || []).length > 0);
   const bodyHeight = visibleDays.reduce((sum, day) => sum + dayHeight + (rowsByDate.get(isoDate(day)) || []).length * rowHeight, 0);
-  const height = Math.max(260, margin + titleHeight + columnHeight + bodyHeight + footerHeight + margin);
+  const height = Math.max(280, margin + titleHeight + columnHeight + bodyHeight + footerHeight + margin);
   const columns = [
-    { label: 'Técnico', x: margin, width: 250 },
-    { label: 'Cliente', x: margin + 250, width: 440 },
-    { label: 'Cidade', x: margin + 690, width: 250 },
-    { label: 'Tipo de atendimento', x: margin + 940, width: contentWidth - 940 },
+    { label: 'Técnico', x: margin, width: 220 },
+    { label: 'Cliente', x: margin + 220, width: 410 },
+    { label: 'Cidade', x: margin + 630, width: 220 },
+    { label: 'Tipo de atendimento', x: margin + 850, width: 330 },
+    { label: 'Série', x: margin + 1180, width: contentWidth - 1180 },
   ];
 
   let y = margin;
@@ -65,8 +67,9 @@ function buildAgendaSvg(weekStart: Date, rows: ShareRow[]) {
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     '<rect width="100%" height="100%" fill="#ffffff"/>',
     `<rect x="${margin}" y="${y}" width="${contentWidth}" height="${titleHeight}" rx="18" fill="#101827"/>`,
-    `<text x="${margin + 28}" y="${y + 38}" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#ffffff">Agenda da semana</text>`,
-    `<text x="${margin + 28}" y="${y + 68}" font-family="Arial, sans-serif" font-size="16" fill="#cbd5e1">${escapeXml(shortDate.format(weekStart))} — ${escapeXml(shortDate.format(addDays(weekStart, 5)))}</text>`,
+    `<text x="${margin + 28}" y="${y + 35}" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#ffffff">Agenda da semana</text>`,
+    `<text x="${margin + 28}" y="${y + 65}" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#e2e8f0">Filial: ${escapeXml(branchLabel)}</text>`,
+    `<text x="${margin + 28}" y="${y + 91}" font-family="Arial, sans-serif" font-size="16" fill="#cbd5e1">${escapeXml(shortDate.format(weekStart))} — ${escapeXml(shortDate.format(addDays(weekStart, 5)))}</text>`,
   ];
 
   y += titleHeight + 14;
@@ -85,10 +88,11 @@ function buildAgendaSvg(weekStart: Date, rows: ShareRow[]) {
     dayRows.forEach((row, index) => {
       const fill = index % 2 === 0 ? '#ffffff' : '#fbfcfe';
       parts.push(`<rect x="${margin}" y="${y}" width="${contentWidth}" height="${rowHeight}" fill="${fill}" stroke="#edf1f5"/>`);
-      parts.push(`<text x="${columns[0].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#172033">${escapeXml(cut(row.technician, 26))}</text>`);
-      parts.push(`<text x="${columns[1].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#334155">${escapeXml(cut(row.client, 44))}</text>`);
-      parts.push(`<text x="${columns[2].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#475569">${escapeXml(cut(row.city, 25))}</text>`);
-      parts.push(`<text x="${columns[3].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#334155">${escapeXml(cut(row.reason, 38))}</text>`);
+      parts.push(`<text x="${columns[0].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#172033">${escapeXml(cut(row.technician, 23))}</text>`);
+      parts.push(`<text x="${columns[1].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#334155">${escapeXml(cut(row.client, 40))}</text>`);
+      parts.push(`<text x="${columns[2].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#475569">${escapeXml(cut(row.city, 22))}</text>`);
+      parts.push(`<text x="${columns[3].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#334155">${escapeXml(cut(row.reason, 31))}</text>`);
+      parts.push(`<text x="${columns[4].x + 14}" y="${y + 34}" font-family="Arial, sans-serif" font-size="15" fill="#475569">${escapeXml(cut(row.serial, 30))}</text>`);
       y += rowHeight;
     });
     y += 8;
@@ -99,8 +103,8 @@ function buildAgendaSvg(weekStart: Date, rows: ShareRow[]) {
   return { svg: parts.join(''), width, height };
 }
 
-async function agendaPng(weekStart: Date, rows: ShareRow[]) {
-  const rendered = buildAgendaSvg(weekStart, rows);
+async function agendaPng(weekStart: Date, rows: ShareRow[], branchLabel: string) {
+  const rendered = buildAgendaSvg(weekStart, rows, branchLabel);
   const svgBlob = new Blob([rendered.svg], { type: 'image/svg+xml;charset=utf-8' });
   const svgUrl = URL.createObjectURL(svgBlob);
   try {
@@ -146,19 +150,25 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState('');
+  const [showPasteTip, setShowPasteTip] = useState(false);
   const shareWeekStart = useMemo(() => startOfWeek(anchorDate), [anchorDate]);
   const weekDates = useMemo(() => new Set(Array.from({ length: 6 }, (_, index) => isoDate(addDays(shareWeekStart, index)))), [shareWeekStart]);
+  const branchLabel = useMemo(() => {
+    const names = Array.from(new Set(technicians.map((item) => String(item.branch || '').trim()).filter(Boolean)));
+    return names.length === 1 ? names[0] : 'Todas';
+  }, [technicians]);
 
   const rows = useMemo<ShareRow[]>(() => {
     const techMap = new Map(technicians.map((item) => [item.id, item.name]));
     return appointments
-      .filter((item) => weekDates.has(item.appointment_date) && techMap.has(item.technician_id))
+      .filter((item) => weekDates.has(item.appointment_date) && techMap.has(item.technician_id) && Boolean(item.client_name?.trim()))
       .map((item) => ({
         date: item.appointment_date,
         technician: techMap.get(item.technician_id) || '',
-        client: item.client_name || '—',
+        client: item.client_name?.trim() || '—',
         city: item.service_city || '—',
         reason: item.service_reason || '—',
+        serial: item.equipment_serial || '—',
       }))
       .sort((a, b) => a.date.localeCompare(b.date) || a.technician.localeCompare(b.technician) || a.client.localeCompare(b.client));
   }, [appointments, technicians, weekDates]);
@@ -176,6 +186,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
     setLoading(true);
     setNotice('');
     setSearch('');
+    setShowPasteTip(false);
 
     async function loadShareConfig() {
       const [recipientResult, defaultResult] = await Promise.all([
@@ -214,7 +225,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
 
     let copied = false;
     try {
-      const png = await agendaPng(shareWeekStart, rows);
+      const png = await agendaPng(shareWeekStart, rows, branchLabel);
       const filename = `agenda-${isoDate(shareWeekStart)}-${isoDate(addDays(shareWeekStart, 5))}.png`;
       try {
         if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
@@ -231,17 +242,21 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
 
     const saved = await saveDefault();
     const period = `${shortDate.format(shareWeekStart)} a ${shortDate.format(addDays(shareWeekStart, 5))}`;
-    const subject = `Agenda atualizada - ${period}`;
-    const body = `Olá,\r\n\r\nCompartilho com vocês a agenda atualizada dos colaboradores da regional.\r\n\r\nPeríodo: ${period}.\r\n`;
+    const subject = `Agenda atualizada - ${branchLabel} - ${period}`;
+    const regionalText = branchLabel === 'Todas' ? 'regional' : `regional ${branchLabel}`;
+    const body = `Olá,\r\n\r\nCompartilho com vocês a agenda atualizada dos colaboradores da ${regionalText}.\r\n\r\nPeríodo: ${period}.\r\n`;
     const recipientsPath = selectedEmails.map((email) => encodeURIComponent(email)).join(';');
     const mailtoUrl = `mailto:${recipientsPath}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
     setNotice(copied
-      ? `${saved ? 'Destinatários salvos. ' : ''}Agenda copiada. No Outlook, pressione Ctrl+V para inserir a agenda no e-mail.`
+      ? `${saved ? 'Destinatários salvos. ' : ''}Agenda copiada. Cole a imagem no Outlook ou pressione Ctrl+V.`
       : `${saved ? 'Destinatários salvos. ' : ''}A imagem da agenda foi baixada. Insira a imagem no e-mail antes de enviar.`);
+    setShowPasteTip(copied);
     setOpening(false);
 
-    window.location.href = mailtoUrl;
+    window.setTimeout(() => {
+      window.location.href = mailtoUrl;
+    }, 120);
   }
 
   if (!open) return null;
@@ -250,7 +265,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
     <section className="agenda-share-modal" onClick={(event) => event.stopPropagation()} aria-label="Compartilhar agenda">
       <header className="agenda-share-head">
         <div className="agenda-share-icon"><Mail size={20}/></div>
-        <div><h2>Compartilhar agenda</h2><p>{shortDate.format(shareWeekStart)} — {shortDate.format(addDays(shareWeekStart, 5))}</p></div>
+        <div><h2>Compartilhar agenda</h2><p>Filial: {branchLabel} · {shortDate.format(shareWeekStart)} — {shortDate.format(addDays(shareWeekStart, 5))}</p></div>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Fechar"><X size={18}/></button>
       </header>
 
@@ -274,16 +289,16 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
         </div>
 
         <div className="agenda-share-preview-panel">
-          <div className="agenda-share-section-title"><div><strong>Prévia da agenda</strong><span>Somente técnico, cliente, cidade e tipo de atendimento.</span></div></div>
+          <div className="agenda-share-section-title"><div><strong>Prévia da agenda</strong><span>Técnico, cliente, cidade, tipo e série do equipamento.</span></div></div>
           <div className="agenda-share-preview">
-            <div className="agenda-share-preview-brand"><strong>Agenda da semana</strong><span>{shortDate.format(shareWeekStart)} — {shortDate.format(addDays(shareWeekStart, 5))}</span></div>
-            {rows.length === 0 ? <div className="agenda-share-empty agenda-share-empty-preview">Nenhum atendimento associado nesta semana.</div> : days.map((day) => {
+            <div className="agenda-share-preview-brand"><strong>Agenda da semana · {branchLabel}</strong><span>{shortDate.format(shareWeekStart)} — {shortDate.format(addDays(shareWeekStart, 5))}</span></div>
+            {rows.length === 0 ? <div className="agenda-share-empty agenda-share-empty-preview">Nenhum atendimento com cliente associado nesta semana.</div> : days.map((day) => {
               const dayRows = rows.filter((row) => row.date === isoDate(day));
               if (!dayRows.length) return null;
               return <div className="agenda-share-day" key={isoDate(day)}>
                 <div className="agenda-share-day-title">{formatDay(day)}</div>
-                <div className="agenda-share-table-head"><span>Técnico</span><span>Cliente</span><span>Cidade</span><span>Tipo</span></div>
-                {dayRows.map((row, index) => <div className="agenda-share-table-row" key={`${row.date}-${row.technician}-${row.client}-${index}`}><strong>{row.technician}</strong><span>{row.client}</span><span>{row.city}</span><span>{row.reason}</span></div>)}
+                <div className="agenda-share-table-head"><span>Técnico</span><span>Cliente</span><span>Cidade</span><span>Tipo</span><span>Série</span></div>
+                {dayRows.map((row, index) => <div className="agenda-share-table-row" key={`${row.date}-${row.technician}-${row.client}-${index}`}><strong>{row.technician}</strong><span>{row.client}</span><span>{row.city}</span><span>{row.reason}</span><span>{row.serial}</span></div>)}
               </div>;
             })}
           </div>
@@ -295,5 +310,13 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
         <button type="button" className="primary-button" disabled={!selectedEmails.length || !rows.length || opening} onClick={() => { void openOutlook(); }}><ExternalLink size={15}/>{opening ? 'Preparando...' : 'Abrir Outlook'}</button>
       </footer>
     </section>
+
+    {showPasteTip && <div className="agenda-share-tip-layer" onClick={() => setShowPasteTip(false)}>
+      <div className="agenda-share-tip" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="icon-button" onClick={() => setShowPasteTip(false)} aria-label="Fechar aviso"><X size={16}/></button>
+        <strong>Agenda copiada</strong>
+        <p>Cole a imagem no e-mail ou pressione <b>Ctrl+V</b>.</p>
+      </div>
+    </div>}
   </div>;
 }
