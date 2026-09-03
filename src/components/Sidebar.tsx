@@ -64,9 +64,29 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
           </div>
 
           <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}><strong style={{ display: 'block', marginBottom: 5, color: '#1e293b', fontSize: 13 }}>Contato do cliente</strong><p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Na primeira vez, preencha o número do cliente. Depois, ao carregar o mesmo cliente em outro atendimento, o contato será puxado automaticamente. Com o número preenchido, o botão abre direto a conversa no WhatsApp.</p></div>
-            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}><strong style={{ display: 'block', marginBottom: 5, color: '#1e293b', fontSize: 13 }}>Descrição no card</strong><p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>A descrição informada no atendimento passa a aparecer no topo do card da Agenda para facilitar a leitura sem precisar abrir o atendimento.</p></div>
-            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}><strong style={{ display: 'block', marginBottom: 5, color: '#1e293b', fontSize: 13 }}>Status do faturamento</strong><p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>O status fica visível por cima do card da Agenda e pode ser alterado ali mesmo, sem abrir o atendimento. As opções são <b>-</b>, <b>Pendente</b> e <b>Faturado</b>. O padrão é <b>-</b>, indicado para atendimentos que não geram faturamento.</p></div>
+            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Contato do cliente</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#2563eb', fontSize: 10, fontWeight: 700 }}>Sugerido por Alex Barbosa</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Na primeira vez, preencha o número do cliente. Depois, ao carregar o mesmo cliente em outro atendimento, o contato será puxado automaticamente. Com o número preenchido, o botão abre direto a conversa no WhatsApp.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Descrição no card</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#2563eb', fontSize: 10, fontWeight: 700 }}>Sugerido por Tiago Gomes</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>A descrição informada no atendimento passa a aparecer no topo do card da Agenda para facilitar a leitura sem precisar abrir o atendimento.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Disparo de agenda por e-mail</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#2563eb', fontSize: 10, fontWeight: 700 }}>Sugerido por Tiago Gomes</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Agora é possível compartilhar a agenda pelo botão <b>Compartilhar</b>. Selecione os destinatários, confira a prévia e clique em <b>Abrir Outlook</b>. O sistema prepara o e-mail, salva os destinatários selecionados como padrão e copia a agenda formatada para colar no corpo do e-mail com <b>Ctrl+V</b>.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Status do faturamento</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#2563eb', fontSize: 10, fontWeight: 700 }}>Sugerido por Tiago Gomes</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>O status fica visível por cima do card da Agenda e pode ser alterado ali mesmo, sem abrir o atendimento. As opções são <b>-</b>, <b>Pendente</b> e <b>Faturado</b>. O padrão é <b>-</b>, indicado para atendimentos que não geram faturamento.</p>
+            </div>
           </div>
         </div>
       </div>}
