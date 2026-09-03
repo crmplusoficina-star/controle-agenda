@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Map, Plus, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Map, Plus, Share2, X } from 'lucide-react';
 import type { Appointment, Branch, ClientSummary, Technician } from '../types';
 import { addDays, isoDate, startOfWeek } from '../lib/date';
 import { supabase } from '../lib/supabase';
 import { APPOINTMENT_TYPE_LEGEND, appointmentTypeStyle } from './appointmentTypes';
 import { RetentionMap } from './RetentionMap';
+import { AgendaShareModal } from './AgendaShareModal';
 import type { RecencyBucket } from './retentionRecency';
 import './agenda-colors.css';
 
@@ -82,6 +83,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
   const [copying, setCopying] = useState(false);
   const [billingBusyId, setBillingBusyId] = useState<string | null>(null);
   const [reasonFilters, setReasonFilters] = useState<string[]>([]);
+  const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
     if (range === 'week') setAnchorDate(startOfWeek(weekStart));
@@ -258,6 +260,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
         </div>
         <button className="icon-button" type="button" onClick={() => movePeriod(-1)} aria-label="Período anterior"><ChevronLeft size={18} /></button>
         <button className="icon-button" type="button" onClick={() => movePeriod(1)} aria-label="Próximo período"><ChevronRight size={18} /></button>
+        <button className="subtle-button" type="button" onClick={() => setShareOpen(true)}><Share2 size={16}/> Compartilhar</button>
         <button className="primary-button" onClick={onAddTechnician}><Plus size={17} /> Técnico</button>
       </div>
     </div>
@@ -361,5 +364,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
         onSchedule={onSchedule}
       />
     </div>}
+
+    <AgendaShareModal open={shareOpen} onClose={() => setShareOpen(false)} anchorDate={anchorDate} technicians={technicians} appointments={allAppointments} />
   </div>;
 }
