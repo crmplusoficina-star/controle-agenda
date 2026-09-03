@@ -15,7 +15,7 @@ const monthTitle = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'nume
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 type AgendaRange = 'today' | 'week' | 'fortnight' | 'month';
-type BillingStatus = 'aguardando_faturamento' | 'faturado';
+type BillingStatus = 'nao_precificado' | 'aguardando_faturamento' | 'faturado';
 
 const statusClass: Record<string, string> = {
   planejado: 'status-plan', confirmado: 'status-confirm', em_atendimento: 'status-progress', concluido: 'status-done', cancelado: 'status-cancel',
@@ -221,8 +221,12 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
   async function changeBillingStatus(item: Appointment, nextStatus: BillingStatus) {
     if (billingBusyId === item.id) return;
     const previousStatus = item.billing_status;
-    const visibleStatus: BillingStatus = previousStatus === 'faturado' ? 'faturado' : 'aguardando_faturamento';
-    if (visibleStatus === nextStatus && previousStatus === nextStatus) return;
+    const visibleStatus: BillingStatus = previousStatus === 'faturado'
+      ? 'faturado'
+      : previousStatus === 'aguardando_faturamento'
+        ? 'aguardando_faturamento'
+        : 'nao_precificado';
+    if (visibleStatus === nextStatus) return;
 
     const replaceStatus = (rows: Appointment[], status: string) => rows.map((row) => row.id === item.id ? { ...row, billing_status: status } : row);
     setBillingBusyId(item.id);
@@ -297,7 +301,11 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                 {allCellItems.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
                   const typeStyle = appointmentTypeStyle(item.service_reason);
                   const hasForecast = Number(item.forecast_amount || 0) > 0;
-                  const billingStatus: BillingStatus = item.billing_status === 'faturado' ? 'faturado' : 'aguardando_faturamento';
+                  const billingStatus: BillingStatus = item.billing_status === 'faturado'
+                    ? 'faturado'
+                    : item.billing_status === 'aguardando_faturamento'
+                      ? 'aguardando_faturamento'
+                      : 'nao_precificado';
                   return <div className="appointment-card-wrap" key={item.id}>
                     <button
                       draggable
@@ -315,7 +323,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                       {hasForecast && <small className="appointment-card-revenue">Faturamento: <b>{money.format(Number(item.forecast_amount))}</b></small>}
                     </button>
                     <select
-                      className={`appointment-billing-inline ${billingStatus === 'faturado' ? 'is-paid' : 'is-pending'}`}
+                      className={`appointment-billing-inline ${billingStatus === 'faturado' ? 'is-paid' : billingStatus === 'aguardando_faturamento' ? 'is-pending' : 'is-empty'}`}
                       value={billingStatus}
                       disabled={billingBusyId === item.id}
                       draggable={false}
@@ -325,6 +333,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                       onClick={(event) => event.stopPropagation()}
                       onChange={(event) => { event.stopPropagation(); void changeBillingStatus(item, event.target.value as BillingStatus); }}
                     >
+                      <option value="nao_precificado">-</option>
                       <option value="aguardando_faturamento">Pendente</option>
                       <option value="faturado">Faturado</option>
                     </select>
