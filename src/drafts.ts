@@ -29,7 +29,7 @@ export type FollowupDraft = {
 };
 
 export function emptyAppointment(date: string, technicianId: string, branch: string): AppointmentDraft {
-  return { id: '', branch, appointment_date: date, technician_id: technicianId, client_name: '', equipment_serial: '', service_city: '', status: 'planejado', service_reason: '', description: '', reported_hourmeter: '', forecast_amount: '', billing_status: 'nao_precificado' };
+  return { id: '', branch, appointment_date: date, technician_id: technicianId, client_name: '', equipment_serial: '', service_city: '', status: 'planejado', service_reason: '', description: '', reported_hourmeter: '', forecast_amount: '', billing_status: 'aguardando_faturamento' };
 }
 
 export function emptyFollowup(branch: string): FollowupDraft {
