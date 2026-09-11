@@ -47,7 +47,7 @@ function fold(value: string | null | undefined) {
 const terms: Record<Exclude<Category, 'other'>, RegExp> = {
   undercarriage: /(material rodante|sprocket|rolete|roda guia|corrente|elo|sapata|esteira|tensor|regulagem de esteira|ajuste de esteira)/,
   cooling: /(liquido de arrefecimento|arrefecimento|coolant|radiador|reservatorio|mangueira.*agua|vaz.*agua|vaz.*liquido|superaquec|aquecendo|fervendo|temperatura.*motor)/,
-  engine: /(motor|cabecote|turbo|injetor|injecao|blow by|compressao|fumac|consumo de oleo|pressao de oleo|lubrifica|carter|barulho.*motor|ruido.*motor|motor.*barulho|motor.*ruido)/,
+  engine: /(motor|cabecote|turbo|injetor|injecao|blow by|compressao|fumac|consumo de oleo|pressao de oleo|lubrifica|carter|barulho.*motor|ruido.*motor|motor.*barulho|motor.*ruido|vaz.*oleo.*motor|oleo.*motor.*vaz|perd.*oleo.*motor)/,
   transmission: /(transmiss|patin|embreagem|conversor|troca de marcha|marchas|nao engata|tranco|oleo de transmiss)/,
   axle: /(diferencial|eixo dianteiro|eixo traseiro|eixo motriz|redutor final|final drive|carda|cardan|cruzeta)/,
   hydraulics: /(hidraul|bomba principal|bomba hidraul|motor de giro|motor de translacao|valvula principal|cilindro|contaminacao do circuito)/,
@@ -154,7 +154,7 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
   }
 
   if (currentCategory === 'engine') {
-    const strong = /(barulho.*motor|ruido.*motor|motor.*barulho|motor.*ruido|fumac|consumo.*oleo|blow by|baixa compress|limalha|metal.*oleo|pressao.*oleo|falha grave.*motor)/.test(current);
+    const strong = /(barulho.*motor|ruido.*motor|motor.*barulho|motor.*ruido|fumac|consumo.*oleo|blow by|baixa compress|limalha|metal.*oleo|pressao.*oleo|falha grave.*motor|vaz.*oleo.*motor|oleo.*motor.*vaz|perd.*oleo.*motor)/.test(current);
     const score = (strong ? 5 : 0) + hourScore(hourmeter) + (stats.engine.last24m >= 2 ? 4 : stats.engine.last24m ? 2 : 0);
     if (score >= 5) {
       candidates.push(candidate(
@@ -304,20 +304,25 @@ export async function buildCommercialInsight(
   machineContext: MachineSummary | null,
   lastHourmeter: { hourmeter: number; reading_date: string } | null,
 ): Promise<CommercialInsight | null> {
-  const serial = draft.equipment_serial.trim();
-  if (!serial) return null;
+  const serial = draft.equipment_serial.trim() || machineContext?.serial?.trim() || '';
+
+  const campaignPromise = serial ? campaignCandidate(serial) : Promise.resolve(null);
+  const historyPromise = serial
+    ? supabase
+        .from('g4_history_app')
+        .select('service_date,description,operation_type,os_type')
+        .ilike('serial', serial)
+        .order('service_date', { ascending: false })
+        .limit(120)
+    : Promise.resolve({ data: [], error: null } as any);
+  const clientPromise = draft.client_name.trim()
+    ? supabase.from('g4_client_summary').select('machine_count').ilike('client_name', `%${draft.client_name.trim()}%`).order('machine_count', { ascending: false }).limit(1)
+    : Promise.resolve({ data: [], error: null } as any);
 
   const [campaign, historyResult, clientResult] = await Promise.all([
-    campaignCandidate(serial),
-    supabase
-      .from('g4_history_app')
-      .select('service_date,description,operation_type,os_type')
-      .ilike('serial', serial)
-      .order('service_date', { ascending: false })
-      .limit(120),
-    draft.client_name.trim()
-      ? supabase.from('g4_client_summary').select('machine_count').ilike('client_name', `%${draft.client_name.trim()}%`).order('machine_count', { ascending: false }).limit(1)
-      : Promise.resolve({ data: [], error: null } as any),
+    campaignPromise,
+    historyPromise,
+    clientPromise,
   ]);
 
   if (campaign) return campaign;
