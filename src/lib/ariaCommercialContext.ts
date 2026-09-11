@@ -40,9 +40,16 @@ const signals: Signal[] = [
   {
     key: 'engine_smoke_consumption',
     label: 'Motor',
-    current: /(fumac|fumaça|consumo.*oleo|consumo.*óleo|baixando oleo|baixando óleo|blow by|blow-by)/,
-    historical: /(fumac|fumaça|consumo.*oleo|consumo.*óleo|blow by|blow-by|cabecote|cabeçote|turbo|injetor|lubrifica)/,
+    current: /(fumac|consumo.*oleo|baixando oleo|blow by)/,
+    historical: /(fumac|consumo.*oleo|blow by|cabecote|turbo|injetor|lubrifica)/,
     suggestion: 'O histórico relacionado ao motor aumenta a relevância comercial deste atendimento. Se a avaliação técnica confirmar necessidade de intervenção maior, vale comparar uma solução estruturada de reparo/recondicionamento ou Reman com novas intervenções parciais.',
+  },
+  {
+    key: 'hvac',
+    label: 'Climatização / cabine',
+    current: /(ar condicionado|a c|ar ).*(nao gela|nao esta gelando|parou de gelar|sem gelar|gelando pouco|fraco|quente)|(?:nao gela|parou de gelar|sem gelar).*(ar condicionado|a c|ar)/,
+    historical: /(ar condicionado|a c|climatiza|compressor.*ar|condensador|evaporador|nao gela|parou de gelar|sem gelar|gelando pouco)/,
+    suggestion: 'Se o histórico mostrar repetição de atendimentos no sistema de climatização, pode valer uma abordagem mais completa de cabine/climatização em vez de novas intervenções isoladas. Sem reincidência, este atendimento sozinho não deve virar oportunidade comercial.',
   },
   {
     key: 'undercarriage',
@@ -54,29 +61,29 @@ const signals: Signal[] = [
   {
     key: 'transmission',
     label: 'Transmissão',
-    current: /(transmiss|patin|marcha|nao engata|não engata|tranco)/,
+    current: /(transmiss|patin|marcha|nao engata|tranco)/,
     historical: /(transmiss|patin|marcha|embreagem|conversor|limalha.*transmiss)/,
     suggestion: 'A ocorrência atual se repete no mesmo sistema. Caso a avaliação técnica confirme desgaste interno ou necessidade de reparo maior, vale considerar uma solução estruturada/recondicionamento e verificar disponibilidade de Reman.',
   },
   {
     key: 'hydraulics',
     label: 'Sistema Hidráulico',
-    current: /(hidraul|bomba|cilindro|motor de giro|motor de translacao|motor de translação|valvula|válvula)/,
-    historical: /(hidraul|bomba|cilindro|motor de giro|motor de translacao|motor de translação|valvula|válvula)/,
+    current: /(hidraul|bomba|cilindro|motor de giro|motor de translacao|valvula)/,
+    historical: /(hidraul|bomba|cilindro|motor de giro|motor de translacao|valvula)/,
     suggestion: 'Existe recorrência no sistema hidráulico. Se o diagnóstico atual confirmar desgaste relacionado, vale avaliar se faz sentido uma abordagem por conjunto ou parada programada, em vez de continuar apenas com intervenções pontuais.',
   },
   {
     key: 'implements',
     label: 'Implementos / GET',
-    current: /(cacamba|caçamba|dente|adaptador|rompedor|acoplador|implemento|engate rapido|engate rápido)/,
-    historical: /(cacamba|caçamba|dente|adaptador|rompedor|acoplador|implemento|engate rapido|engate rápido)/,
+    current: /(cacamba|dente|adaptador|rompedor|acoplador|implemento|engate rapido)/,
+    historical: /(cacamba|dente|adaptador|rompedor|acoplador|implemento|engate rapido)/,
     suggestion: 'O mesmo grupo de implementos/itens de desgaste aparece novamente no histórico. Pode existir oportunidade de avaliar uma solução mais adequada à aplicação ou um pacote de componentes, em vez de reposições isoladas recorrentes.',
   },
   {
     key: 'structure',
     label: 'Estrutura / Articulações',
-    current: /(trinca|folga|pino|bucha|lanca|lança|braco|braço|articulacao|articulação)/,
-    historical: /(trinca|folga|pino|bucha|lanca|lança|braco|braço|articulacao|articulação)/,
+    current: /(trinca|folga|pino|bucha|lanca|braco|articulacao)/,
+    historical: /(trinca|folga|pino|bucha|lanca|braco|articulacao)/,
     suggestion: 'Há recorrência em estrutura/articulações. Se a avaliação técnica apontar desgaste distribuído, vale analisar uma recuperação mais ampla em parada programada em vez de novos reparos isolados.',
   },
 ];
@@ -91,13 +98,28 @@ function hourmeterFromDraft(draft: AppointmentDraft) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function countMajorSystems(rows: HistoryRow[]) {
+  const found = new Set<string>();
+  for (const row of rows) {
+    const text = fold([row.description, row.operation_type, row.os_type].filter(Boolean).join(' '));
+    if (/(motor|cabecote|turbo|injetor|lubrifica|fumac)/.test(text)) found.add('engine');
+    if (/(transmiss|patin|embreagem|conversor)/.test(text)) found.add('transmission');
+    if (/(diferencial|eixo|redutor final|cardan)/.test(text)) found.add('axle');
+    if (/(hidraul|bomba|cilindro|motor de giro|motor de translacao|valvula)/.test(text)) found.add('hydraulics');
+    if (/(material rodante|esteira|rolete|sprocket|roda guia|corrente|sapata)/.test(text)) found.add('undercarriage');
+    if (/(trinca|folga|pino|bucha|lanca|braco|articulacao|estrutura)/.test(text)) found.add('structure');
+  }
+  return found.size;
+}
+
 export async function buildRecurrenceCommercialInsight(draft: AppointmentDraft): Promise<CommercialInsight | null> {
   const serial = draft.equipment_serial.trim();
   const currentText = `${draft.service_reason || ''} ${draft.description || ''}`;
   const signal = getSignal(currentText);
-  if (!serial || !signal || fold(draft.description).length < 4) return null;
+  const hourmeter = hourmeterFromDraft(draft);
 
-  // ilike evita perder o histórico por diferença de maiúsculas/minúsculas na série.
+  if (!serial || fold(draft.description).length < 4) return null;
+
   const { data, error } = await supabase
     .from('g4_history_app')
     .select('service_date,description,operation_type,os_type')
@@ -107,8 +129,27 @@ export async function buildRecurrenceCommercialInsight(draft: AppointmentDraft):
 
   if (error) return null;
 
+  const rows = (data || []) as HistoryRow[];
   const now = Date.now();
-  const related = ((data || []) as HistoryRow[]).filter((row) => {
+  const recent24 = rows.filter((row) => row.service_date && now - new Date(row.service_date).getTime() <= 730 * DAY);
+  const majorSystems24 = countMajorSystems(recent24);
+
+  // Correção de lógica: horímetro muito elevado não pode ser ignorado só porque a descrição atual
+  // não pertence às categorias de alto valor. Ainda assim, evitamos alertar por horímetro sozinho:
+  // exigimos histórico operacional suficiente para tornar a conversa de ciclo de vida útil.
+  if (hourmeter >= 30000 && rows.length >= 5) {
+    return {
+      title: 'Oportunidade identificada: Ciclo de vida do equipamento',
+      message: `A máquina está com ${Math.round(hourmeter).toLocaleString('pt-BR')} h informadas e possui histórico de atendimentos suficiente para justificar uma conversa de ciclo de vida. Este atendimento pode ser uma oportunidade para avaliar economicamente continuar reparando, reformar ou planejar renovação — sem relação direta com o diagnóstico atual.`,
+      potential: 'Estratégico',
+      score: 16 + Math.min(4, majorSystems24),
+      kind: 'lifecycle:extreme_hourmeter',
+    };
+  }
+
+  if (!signal) return null;
+
+  const related = rows.filter((row) => {
     const text = fold([row.description, row.operation_type, row.os_type].filter(Boolean).join(' '));
     return signal.historical.test(text);
   });
@@ -116,10 +157,7 @@ export async function buildRecurrenceCommercialInsight(draft: AppointmentDraft):
   const last6m = related.filter((row) => row.service_date && now - new Date(row.service_date).getTime() <= 183 * DAY);
   const last12m = related.filter((row) => row.service_date && now - new Date(row.service_date).getTime() <= 365 * DAY);
   const last24m = related.filter((row) => row.service_date && now - new Date(row.service_date).getTime() <= 730 * DAY);
-  const hourmeter = hourmeterFromDraft(draft);
 
-  // Silêncio por padrão. Um único atendimento atual não vira oportunidade comercial sozinho.
-  // Mostra somente quando existe reincidência real do mesmo tema, ou reincidência + ciclo de vida relevante.
   const strongRecurrence = last6m.length >= 2 || last12m.length >= 3;
   const usefulRecurrence = last12m.length >= 1 && hourmeter >= 8000;
   const repeatedHistory = last24m.length >= 2;
@@ -138,7 +176,7 @@ export async function buildRecurrenceCommercialInsight(draft: AppointmentDraft):
 
   return {
     title: `Oportunidade identificada: ${signal.label}`,
-    message: `A ArIA encontrou ${last12m.length || last24m.length} atendimento(s) anterior(es) relacionado(s ao mesmo tema desta ocorrência.${lastText}${hourText} ${signal.suggestion}`.replace('relacionado(s ao', 'relacionado(s) ao'),
+    message: `A ArIA encontrou ${last12m.length || last24m.length} atendimento(s) anterior(es) relacionado(s) ao mesmo tema desta ocorrência.${lastText}${hourText} ${signal.suggestion}`,
     potential: score >= 12 ? 'Muito alto' : 'Alto',
     score,
     kind: `recurrence:${signal.key}`,
