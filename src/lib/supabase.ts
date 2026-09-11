@@ -21,6 +21,7 @@ const agendaRelations = new Set([
   'client_contacts',
   'agenda_share_recipients',
   'agenda_share_user_defaults',
+  'aria_campaign_targets',
 ]);
 
 const primaryFrom = primarySupabase.from.bind(primarySupabase);
