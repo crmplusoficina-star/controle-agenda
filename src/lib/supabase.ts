@@ -42,4 +42,13 @@ Object.defineProperty(primarySupabase.functions, 'invoke', {
     : primaryInvoke(functionName, options),
 });
 
+const primaryRpc = primarySupabase.rpc.bind(primarySupabase);
+Object.defineProperty(primarySupabase, 'rpc', {
+  configurable: false,
+  writable: false,
+  value: (functionName: string, args?: any, options?: any) => functionName === 'aria_learn_from_chat'
+    ? agendaSupabase.rpc(functionName, args, options)
+    : primaryRpc(functionName, args, options),
+});
+
 export const supabase = primarySupabase;
