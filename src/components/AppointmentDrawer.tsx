@@ -5,6 +5,7 @@ import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
 import { buildCommercialInsight, type CommercialInsight } from '../lib/commercialInsights';
 import { buildRecurrenceCommercialInsight } from '../lib/ariaCommercialContext';
+import { buildSemanticCommercialInsight } from '../lib/semanticInsights';
 import type { MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
 
@@ -94,11 +95,12 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         const recurrencePromise = draft.equipment_serial.trim()
           ? buildRecurrenceCommercialInsight(draft)
           : Promise.resolve(null);
-        const [recurrence, general] = await Promise.all([
+        const [semantic, recurrence, general] = await Promise.all([
+          buildSemanticCommercialInsight(draft, machineContext),
           recurrencePromise,
           buildCommercialInsight(draft, machineContext, lastHourmeter),
         ]);
-        const result = [recurrence, general]
+        const result = [semantic, recurrence, general]
           .filter((item): item is CommercialInsight => Boolean(item))
           .sort((a, b) => b.score - a.score)[0] || null;
         if (!cancelled) setInsight(result);
@@ -108,7 +110,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       } finally {
         if (!cancelled) setInsightBusy(false);
       }
-    }, 550);
+    }, 700);
 
     return () => {
       cancelled = true;
