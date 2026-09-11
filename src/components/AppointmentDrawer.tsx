@@ -1,11 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Check, Lightbulb, Loader2, MessageCircle, Trash2 } from 'lucide-react';
+import { Check, Loader2, MessageCircle, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
-import type { CommercialInsight } from '../lib/commercialInsights';
-import { buildRecurrenceCommercialInsight } from '../lib/ariaCommercialContext';
-import { buildSemanticCommercialInsight } from '../lib/semanticInsights';
 import type { MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
 
@@ -57,9 +54,6 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   onSerialChange: (value: string) => void;
 }) {
   const [clientContact, setClientContact] = useState('');
-  const [insight, setInsight] = useState<CommercialInsight | null>(null);
-  const [insightBusy, setInsightBusy] = useState(false);
-  const [insightFeedbackBusy, setInsightFeedbackBusy] = useState(false);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const waNumber = whatsappNumber(clientContact);
 
@@ -79,58 +73,6 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     return () => { cancelled = true; };
   }, [contactKey]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-
-    const descriptionReady = Boolean(draft && draft.description.trim().length >= 4);
-    if (!draft || !descriptionReady) {
-      setInsight(null);
-      setInsightBusy(false);
-      return () => { cancelled = true; };
-    }
-
-    timer = window.setTimeout(async () => {
-      setInsightBusy(true);
-      try {
-        const recurrencePromise = draft.equipment_serial.trim()
-          ? buildRecurrenceCommercialInsight(draft)
-          : Promise.resolve(null);
-        const [semantic, recurrence] = await Promise.all([
-          buildSemanticCommercialInsight(draft, machineContext),
-          recurrencePromise,
-        ]);
-
-        // A ArIA semântica decide se existe oportunidade. Regras antigas genéricas
-        // não podem preencher o card apenas porque reconheceram um sistema.
-        const result = [semantic, recurrence]
-          .filter((item): item is CommercialInsight => Boolean(item))
-          .sort((a, b) => b.score - a.score)[0] || null;
-        if (!cancelled) setInsight(result);
-      } catch (error) {
-        console.error('aria_commercial_insight_failed', error);
-        if (!cancelled) setInsight(null);
-      } finally {
-        if (!cancelled) setInsightBusy(false);
-      }
-    }, 700);
-
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [
-    draft?.equipment_serial,
-    draft?.client_name,
-    draft?.service_reason,
-    draft?.description,
-    draft?.reported_hourmeter,
-    machineContext?.serial,
-    machineContext?.last_operation_type,
-    machineContext?.service_count,
-    lastHourmeter?.hourmeter,
-  ]);
-
   async function saveClientContact() {
     if (!draft || !contactKey || !clientContact.trim()) return;
     await supabase.from('client_contacts').upsert({
@@ -140,33 +82,6 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       phone: clientContact.trim(),
       updated_at: new Date().toISOString(),
     }, { onConflict: 'client_key' });
-  }
-
-  async function markInsightNotUseful() {
-    if (!draft || !insight || insightFeedbackBusy) return;
-    setInsightFeedbackBusy(true);
-    try {
-      const context = [
-        `Insight comercial para atendimento: ${draft.description.trim()}`,
-        draft.equipment_serial.trim() ? `Série ${draft.equipment_serial.trim()}` : '',
-        draft.reported_hourmeter ? `Horímetro ${draft.reported_hourmeter}` : '',
-      ].filter(Boolean).join(' | ');
-      const answer = `${insight.title} — ${insight.message}`;
-      const correction = 'O consultor marcou este insight como não útil. Em contexto semelhante, não repetir esta sugestão genérica. Só mostrar novo insight se houver evidência adicional concreta, como recorrência real, campanha, padrão de frota, manutenção programada conhecida ou outra oportunidade comercial específica.';
-      const { error } = await supabase.rpc('aria_learn_from_chat', {
-        p_original_question: context,
-        p_original_answer: answer,
-        p_correction: correction,
-        p_created_by_matricula: null,
-        p_created_by_name: 'Feedback Insight ArIA',
-      });
-      if (error) throw error;
-      setInsight(null);
-    } catch (error) {
-      console.error('aria_insight_feedback_failed', error);
-    } finally {
-      setInsightFeedbackBusy(false);
-    }
   }
 
   return <Drawer open={Boolean(draft)} title={draft?.id ? 'Editar atendimento' : 'Novo atendimento'} subtitle="Somente o necessário para organizar bem a visita." onClose={onClose} wide>
@@ -184,18 +99,6 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       </label>
       <label>Motivo do atendimento<select value={draft.service_reason} onChange={(e) => setDraft({ ...draft, service_reason: e.target.value })}><option value="">Selecione</option>{reasons.map((r) => <option key={r}>{r}</option>)}</select></label>
       <label>Descrição<textarea rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Ex.: ar-condicionado com baixo rendimento" /></label>
-
-      {insight && <div style={{ display: 'grid', gap: 7, padding: '12px 14px', border: '1px solid #fde68a', borderRadius: 12, background: '#fffbeb' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#92400e' }}><Lightbulb size={16}/><strong>Insight ArIA</strong><small style={{ marginLeft: 'auto', fontWeight: 800 }}>Potencial {insight.potential}</small></div>
-        <strong style={{ color: '#92400e', fontSize: 13 }}>{insight.title}</strong>
-        <div style={{ color: '#78716c', fontSize: 12, lineHeight: 1.5 }}>{insight.message}</div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button type="button" onClick={() => { void markInsightNotUseful(); }} disabled={insightFeedbackBusy} style={{ border: 0, background: 'transparent', color: '#a16207', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '3px 0' }}>
-            {insightFeedbackBusy ? 'Aprendendo…' : 'Não foi útil'}
-          </button>
-        </div>
-      </div>}
-      {!insight && insightBusy ? <small style={{ color: '#94a3b8', fontWeight: 600 }}>ArIA analisando contexto…</small> : null}
 
       <div className="hourmeter-block"><div><span>Último horímetro conhecido</span><strong>{lastHourmeter ? `${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h` : 'Sem leitura anterior'}</strong>{lastHourmeter && <small>{new Intl.DateTimeFormat('pt-BR').format(new Date(`${lastHourmeter.reading_date}T12:00:00`))}</small>}</div><label>Horímetro atual da máquina<input inputMode="decimal" value={draft.reported_hourmeter} onChange={(e) => setDraft({ ...draft, reported_hourmeter: e.target.value })} placeholder="Opcional" /></label>{lastHourmeter && draft.reported_hourmeter !== '' && Number(draft.reported_hourmeter) >= lastHourmeter.hourmeter && <div className="hourmeter-delta">+{(Number(draft.reported_hourmeter) - lastHourmeter.hourmeter).toLocaleString('pt-BR')} h</div>}</div>
       <div className="form-grid two">
