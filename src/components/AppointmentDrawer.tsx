@@ -4,6 +4,7 @@ import { Check, Lightbulb, Loader2, MessageCircle, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
 import { buildCommercialInsight, type CommercialInsight } from '../lib/commercialInsights';
+import { buildRecurrenceCommercialInsight } from '../lib/ariaCommercialContext';
 import type { MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
 
@@ -57,6 +58,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   const [clientContact, setClientContact] = useState('');
   const [insight, setInsight] = useState<CommercialInsight | null>(null);
   const [insightBusy, setInsightBusy] = useState(false);
+  const [insightChecked, setInsightChecked] = useState(false);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const waNumber = whatsappNumber(clientContact);
 
@@ -83,22 +85,37 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     if (!draft?.equipment_serial.trim()) {
       setInsight(null);
       setInsightBusy(false);
+      setInsightChecked(false);
       return () => { cancelled = true; };
     }
 
-    // Pequeno debounce: a ArIA espera o usuário terminar de preencher antes de consultar o histórico.
+    setInsightChecked(false);
+
+    // A ArIA espera o usuário terminar de preencher e cruza contexto comercial + reincidência técnica.
     timer = window.setTimeout(async () => {
       setInsightBusy(true);
       try {
-        const result = await buildCommercialInsight(draft, machineContext, lastHourmeter);
-        if (!cancelled) setInsight(result);
+        const [recurrence, general] = await Promise.all([
+          buildRecurrenceCommercialInsight(draft),
+          buildCommercialInsight(draft, machineContext, lastHourmeter),
+        ]);
+        const result = [recurrence, general]
+          .filter((item): item is CommercialInsight => Boolean(item))
+          .sort((a, b) => b.score - a.score)[0] || null;
+        if (!cancelled) {
+          setInsight(result);
+          setInsightChecked(true);
+        }
       } catch (error) {
         console.error('aria_commercial_insight_failed', error);
-        if (!cancelled) setInsight(null);
+        if (!cancelled) {
+          setInsight(null);
+          setInsightChecked(true);
+        }
       } finally {
         if (!cancelled) setInsightBusy(false);
       }
-    }, 450);
+    }, 550);
 
     return () => {
       cancelled = true;
@@ -148,6 +165,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         <div style={{ color: '#78716c', fontSize: 12, lineHeight: 1.5 }}>{insight.message}</div>
       </div>}
       {!insight && insightBusy ? <small style={{ color: '#94a3b8', fontWeight: 600 }}>ArIA analisando contexto…</small> : null}
+      {!insight && !insightBusy && insightChecked ? <small style={{ color: '#94a3b8', fontWeight: 600 }}>ArIA analisou o contexto e não encontrou uma oportunidade comercial relevante agora.</small> : null}
 
       <div className="hourmeter-block"><div><span>Último horímetro conhecido</span><strong>{lastHourmeter ? `${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h` : 'Sem leitura anterior'}</strong>{lastHourmeter && <small>{new Intl.DateTimeFormat('pt-BR').format(new Date(`${lastHourmeter.reading_date}T12:00:00`))}</small>}</div><label>Horímetro atual da máquina<input inputMode="decimal" value={draft.reported_hourmeter} onChange={(e) => setDraft({ ...draft, reported_hourmeter: e.target.value })} placeholder="Opcional" /></label>{lastHourmeter && draft.reported_hourmeter !== '' && Number(draft.reported_hourmeter) >= lastHourmeter.hourmeter && <div className="hourmeter-delta">+{(Number(draft.reported_hourmeter) - lastHourmeter.hourmeter).toLocaleString('pt-BR')} h</div>}</div>
       <div className="form-grid two">
