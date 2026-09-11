@@ -38,6 +38,68 @@ function whatsappNumber(value: string) {
   return digits;
 }
 
+type AppointmentInsight = {
+  title: string;
+  message: string;
+};
+
+function buildAppointmentInsight(
+  draft: AppointmentDraft,
+  machineContext: MachineSummary | null,
+  lastHourmeter: { hourmeter: number; reading_date: string } | null,
+): AppointmentInsight | null {
+  const currentHourmeter = draft.reported_hourmeter === '' ? null : Number(draft.reported_hourmeter);
+
+  if (lastHourmeter && currentHourmeter != null && Number.isFinite(currentHourmeter) && currentHourmeter < lastHourmeter.hourmeter) {
+    return {
+      title: 'Conferir horímetro',
+      message: `O horímetro informado (${currentHourmeter.toLocaleString('pt-BR')} h) está abaixo da última leitura conhecida (${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h). Confira antes de salvar.`,
+    };
+  }
+
+  const reason = draft.service_reason.toLowerCase();
+  const description = draft.description.toLowerCase();
+  const critical = reason.includes('equipamento parado') || /(parad|quebrad|falha|vazamento|não liga|nao liga|superaquec|alarme)/.test(description);
+
+  if (critical) {
+    const history = machineContext?.service_count ? ` A máquina possui ${machineContext.service_count} OS no histórico.` : '';
+    return {
+      title: 'Prioridade operacional',
+      message: `O atendimento indica possível indisponibilidade da máquina.${history} Vale confirmar sintomas, condição atual e peças/ferramentas necessárias antes do deslocamento.`,
+    };
+  }
+
+  if (machineContext?.last_service_at) {
+    const lastService = new Date(machineContext.last_service_at);
+    const days = Math.floor((Date.now() - lastService.getTime()) / 86400000);
+    if (days >= 0 && days <= 30 && draft.service_reason) {
+      return {
+        title: 'Atendimento recente',
+        message: `Esta máquina teve atendimento há ${days === 0 ? 'menos de 1 dia' : `${days} dia(s)`}. Confira o último histórico antes da visita para identificar possível retorno ou reincidência.`,
+      };
+    }
+  }
+
+  if (lastHourmeter && currentHourmeter != null && Number.isFinite(currentHourmeter)) {
+    const delta = currentHourmeter - lastHourmeter.hourmeter;
+    if (delta >= 500) {
+      return {
+        title: 'Uso desde a última leitura',
+        message: `A máquina acumulou aproximadamente ${delta.toLocaleString('pt-BR')} h desde o último horímetro conhecido. Considere esse uso ao avaliar revisão e itens preventivos.`,
+      };
+    }
+  }
+
+  if (machineContext && machineContext.service_count >= 5 && draft.service_reason && draft.description.trim()) {
+    return {
+      title: 'Histórico relevante',
+      message: `A máquina já possui ${machineContext.service_count} OS registradas. Antes da visita, vale comparar a descrição atual com o último atendimento (${machineContext.last_operation_type || 'operação não informada'}) para evitar diagnóstico repetido.`,
+    };
+  }
+
+  return null;
+}
+
 export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, machineContext, lastHourmeter, formError, saveBusy, onSubmit, onClose, onDelete, onSelectMachine, onSerialChange }: {
   draft: AppointmentDraft | null;
   setDraft: (draft: AppointmentDraft) => void;
@@ -56,6 +118,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   const [clientContact, setClientContact] = useState('');
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const waNumber = whatsappNumber(clientContact);
+  const insight = draft ? buildAppointmentInsight(draft, machineContext, lastHourmeter) : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -99,10 +162,11 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       </label>
       <label>Motivo do atendimento<select value={draft.service_reason} onChange={(e) => setDraft({ ...draft, service_reason: e.target.value })}><option value="">Selecione</option>{reasons.map((r) => <option key={r}>{r}</option>)}</select></label>
       <label>Descrição<textarea rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Ex.: ar-condicionado com baixo rendimento" /></label>
-      <div style={{ display: 'grid', gap: 7, padding: '12px 14px', border: '1px solid #fde68a', borderRadius: 12, background: '#fffbeb' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#92400e' }}><Lightbulb size={16}/><strong>Insight</strong><small style={{ marginLeft: 'auto', fontWeight: 700 }}>Esboço</small></div>
-        <div style={{ color: '#78716c', fontSize: 12, lineHeight: 1.45 }}>Espaço reservado para um insight do atendimento. A lógica desta funcionalidade será desenvolvida depois.</div>
-      </div>
+      {insight && <div style={{ display: 'grid', gap: 7, padding: '12px 14px', border: '1px solid #fde68a', borderRadius: 12, background: '#fffbeb' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#92400e' }}><Lightbulb size={16}/><strong>Insight</strong><small style={{ marginLeft: 'auto', fontWeight: 700 }}>Agora</small></div>
+        <strong style={{ color: '#92400e', fontSize: 13 }}>{insight.title}</strong>
+        <div style={{ color: '#78716c', fontSize: 12, lineHeight: 1.45 }}>{insight.message}</div>
+      </div>}
       <div className="hourmeter-block"><div><span>Último horímetro conhecido</span><strong>{lastHourmeter ? `${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h` : 'Sem leitura anterior'}</strong>{lastHourmeter && <small>{new Intl.DateTimeFormat('pt-BR').format(new Date(`${lastHourmeter.reading_date}T12:00:00`))}</small>}</div><label>Horímetro atual da máquina<input inputMode="decimal" value={draft.reported_hourmeter} onChange={(e) => setDraft({ ...draft, reported_hourmeter: e.target.value })} placeholder="Opcional" /></label>{lastHourmeter && draft.reported_hourmeter !== '' && Number(draft.reported_hourmeter) >= lastHourmeter.hourmeter && <div className="hourmeter-delta">+{(Number(draft.reported_hourmeter) - lastHourmeter.hourmeter).toLocaleString('pt-BR')} h</div>}</div>
       <div className="form-grid two">
         <label>Previsão de faturamento<input inputMode="decimal" value={draft.forecast_amount} onChange={(e) => setDraft({ ...draft, forecast_amount: e.target.value })} placeholder="0,00" /></label>
