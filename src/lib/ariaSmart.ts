@@ -293,7 +293,17 @@ export async function learnCorrectionResilient(originalQuestion: string, origina
   };
 
   const localSaved = saveLocalLearning(row);
-  const { error } = await supabase.from('aria_learning').insert({
+  const { error: rpcError } = await supabase.rpc('aria_learn_from_chat', {
+    p_original_question: row.original_question,
+    p_original_answer: row.original_answer,
+    p_correction: row.correction,
+    p_created_by_matricula: row.created_by_matricula,
+    p_created_by_name: row.created_by_name,
+  });
+
+  if (!rpcError) return { localSaved, sharedSaved: true };
+
+  const { error: fallbackError } = await supabase.from('aria_learning').insert({
     original_question: row.original_question,
     original_answer: row.original_answer,
     correction: row.correction,
@@ -302,7 +312,8 @@ export async function learnCorrectionResilient(originalQuestion: string, origina
     created_by_name: row.created_by_name,
   });
 
-  return { localSaved, sharedSaved: !error };
+  if (fallbackError) console.error('aria_learning_persist_failed', { rpcError, fallbackError });
+  return { localSaved, sharedSaved: !fallbackError };
 }
 
 export async function answerSmartArIA(message: string, user: AppUser): Promise<ArIAReply | null> {
