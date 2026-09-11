@@ -156,7 +156,7 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
   if (currentCategory === 'engine') {
     const strong = /(barulho.*motor|ruido.*motor|motor.*barulho|motor.*ruido|fumac|consumo.*oleo|blow by|baixa compress|limalha|metal.*oleo|pressao.*oleo|falha grave.*motor)/.test(current);
     const score = (strong ? 5 : 0) + hourScore(hourmeter) + (stats.engine.last24m >= 2 ? 4 : stats.engine.last24m ? 2 : 0);
-    if (score >= 6) {
+    if (score >= 5) {
       candidates.push(candidate(
         'Oportunidade identificada: Motor',
         `O relato atual aponta para um tema de motor${hourmeter ? ` em uma máquina com ${Math.round(hourmeter).toLocaleString('pt-BR')} h` : ''}. Vale levar o histórico de intervenções do motor para o atendimento e, caso a avaliação técnica confirme desgaste relevante ou necessidade de intervenção maior, considerar uma solução estruturada ou Reman em vez de uma nova intervenção isolada.`,
@@ -170,7 +170,7 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
   if (currentCategory === 'cooling') {
     const strong = /(vaz.*liquido|vaz.*agua|arrefecimento|superaquec|fervendo|temperatura.*motor)/.test(current);
     const score = (strong ? 4 : 0) + hourScore(hourmeter) + (stats.cooling.last24m >= 2 ? 4 : stats.cooling.last24m ? 2 : 0) + (stats.engine.last24m >= 2 ? 2 : 0);
-    if (score >= 6) {
+    if (score >= 4) {
       candidates.push(candidate(
         'Oportunidade identificada: Arrefecimento',
         `O atendimento atual envolve o sistema de arrefecimento${hourmeter ? ` e a máquina está com ${Math.round(hourmeter).toLocaleString('pt-BR')} h` : ''}. Vale consultar se já existem intervenções relacionadas e, se a avaliação técnica apontar reincidência ou comprometimento maior do sistema, considerar uma solução mais ampla em vez de tratar somente o evento atual.`,
@@ -185,7 +185,7 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
     const recurrence = stats.hvac.last24m;
     const currentFailure = /(nao gela|sem gelar|parou de gelar|vaz.*ar condicionado|compressor|evaporador|condensador)/.test(current);
     const score = (currentFailure ? 4 : 0) + hourScore(hourmeter) + (recurrence >= 3 ? 5 : recurrence >= 2 ? 3 : recurrence ? 2 : 0) + (clientMachineCount >= 5 ? 1 : 0);
-    if (score >= 6) {
+    if (score >= 4) {
       candidates.push(candidate(
         'Oportunidade identificada: Climatização',
         `O atendimento atual envolve o sistema de climatização${hourmeter ? ` em uma máquina com ${Math.round(hourmeter).toLocaleString('pt-BR')} h` : ''}${recurrence ? ` e há ${recurrence} ocorrência(s) relacionadas nos últimos 24 meses` : ''}. Se a avaliação técnica confirmar necessidade de intervenção mais ampla, pode valer estruturar o serviço do sistema de climatização em vez de tratar apenas o sintoma atual.`,
@@ -331,6 +331,6 @@ export async function buildCommercialInsight(
   const clientMachineCount = Number((clientResult.data || [])[0]?.machine_count || 0);
   const candidates = buildCandidates(currentText, hourmeter, stats, clientMachineCount).sort((a, b) => b.score - a.score);
   const best = candidates[0] || null;
-  if (!best || best.score < 6) return null;
+  if (!best || best.score < 4) return null;
   return best;
 }
