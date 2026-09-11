@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { Check, Lightbulb, Loader2, MessageCircle, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
-import { buildCommercialInsight, type CommercialInsight } from '../lib/commercialInsights';
+import type { CommercialInsight } from '../lib/commercialInsights';
 import { buildRecurrenceCommercialInsight } from '../lib/ariaCommercialContext';
 import { buildSemanticCommercialInsight } from '../lib/semanticInsights';
 import type { MachineSummary, Technician } from '../types';
@@ -59,6 +59,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   const [clientContact, setClientContact] = useState('');
   const [insight, setInsight] = useState<CommercialInsight | null>(null);
   const [insightBusy, setInsightBusy] = useState(false);
+  const [insightFeedbackBusy, setInsightFeedbackBusy] = useState(false);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const waNumber = whatsappNumber(clientContact);
 
@@ -95,12 +96,14 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         const recurrencePromise = draft.equipment_serial.trim()
           ? buildRecurrenceCommercialInsight(draft)
           : Promise.resolve(null);
-        const [semantic, recurrence, general] = await Promise.all([
+        const [semantic, recurrence] = await Promise.all([
           buildSemanticCommercialInsight(draft, machineContext),
           recurrencePromise,
-          buildCommercialInsight(draft, machineContext, lastHourmeter),
         ]);
-        const result = [semantic, recurrence, general]
+
+        // A ArIA semântica decide se existe oportunidade. Regras antigas genéricas
+        // não podem preencher o card apenas porque reconheceram um sistema.
+        const result = [semantic, recurrence]
           .filter((item): item is CommercialInsight => Boolean(item))
           .sort((a, b) => b.score - a.score)[0] || null;
         if (!cancelled) setInsight(result);
@@ -139,6 +142,33 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     }, { onConflict: 'client_key' });
   }
 
+  async function markInsightNotUseful() {
+    if (!draft || !insight || insightFeedbackBusy) return;
+    setInsightFeedbackBusy(true);
+    try {
+      const context = [
+        `Insight comercial para atendimento: ${draft.description.trim()}`,
+        draft.equipment_serial.trim() ? `Série ${draft.equipment_serial.trim()}` : '',
+        draft.reported_hourmeter ? `Horímetro ${draft.reported_hourmeter}` : '',
+      ].filter(Boolean).join(' | ');
+      const answer = `${insight.title} — ${insight.message}`;
+      const correction = 'O consultor marcou este insight como não útil. Em contexto semelhante, não repetir esta sugestão genérica. Só mostrar novo insight se houver evidência adicional concreta, como recorrência real, campanha, padrão de frota, manutenção programada conhecida ou outra oportunidade comercial específica.';
+      const { error } = await supabase.rpc('aria_learn_from_chat', {
+        p_original_question: context,
+        p_original_answer: answer,
+        p_correction: correction,
+        p_created_by_matricula: null,
+        p_created_by_name: 'Feedback Insight ArIA',
+      });
+      if (error) throw error;
+      setInsight(null);
+    } catch (error) {
+      console.error('aria_insight_feedback_failed', error);
+    } finally {
+      setInsightFeedbackBusy(false);
+    }
+  }
+
   return <Drawer open={Boolean(draft)} title={draft?.id ? 'Editar atendimento' : 'Novo atendimento'} subtitle="Somente o necessário para organizar bem a visita." onClose={onClose} wide>
     {draft && <form className="form-stack" onSubmit={onSubmit}>
       <div className="form-grid two"><label>Data<input type="date" value={draft.appointment_date} onChange={(e) => setDraft({ ...draft, appointment_date: e.target.value })} /></label><label>Técnico<select value={draft.technician_id} onChange={(e) => { const t = technicians.find((x) => x.id === e.target.value); setDraft({ ...draft, technician_id: e.target.value, branch: t?.branch || draft.branch }); }}><option value="">Selecione o técnico</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.branch}</option>)}</select></label></div>
@@ -159,6 +189,11 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#92400e' }}><Lightbulb size={16}/><strong>Insight ArIA</strong><small style={{ marginLeft: 'auto', fontWeight: 800 }}>Potencial {insight.potential}</small></div>
         <strong style={{ color: '#92400e', fontSize: 13 }}>{insight.title}</strong>
         <div style={{ color: '#78716c', fontSize: 12, lineHeight: 1.5 }}>{insight.message}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="button" onClick={() => { void markInsightNotUseful(); }} disabled={insightFeedbackBusy} style={{ border: 0, background: 'transparent', color: '#a16207', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '3px 0' }}>
+            {insightFeedbackBusy ? 'Aprendendo…' : 'Não foi útil'}
+          </button>
+        </div>
       </div>}
       {!insight && insightBusy ? <small style={{ color: '#94a3b8', fontWeight: 600 }}>ArIA analisando contexto…</small> : null}
 
