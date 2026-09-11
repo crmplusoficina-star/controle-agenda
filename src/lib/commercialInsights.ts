@@ -7,7 +7,7 @@ const DAY = 86400000;
 export type CommercialInsight = {
   title: string;
   message: string;
-  potential: 'Alto' | 'Muito alto' | 'Estratégico';
+  potential: 'Médio' | 'Alto' | 'Muito alto' | 'Estratégico';
   score: number;
   kind: string;
 };
@@ -53,7 +53,7 @@ const terms: Record<Exclude<Category, 'other'>, RegExp> = {
   hydraulics: /(hidraul|bomba principal|bomba hidraul|motor de giro|motor de translacao|valvula principal|cilindro|contaminacao do circuito)/,
   implements: /(cacamba|dente|dentes|adaptador|get\b|rompedor|acoplador|engate rapido|implemento|tesoura|garra)/,
   structure: /(trinca.*lanca|trinca.*braco|pino|bucha|articulacao|folga.*lanca|folga.*braco|estrutura)/,
-  hvac: /(ar condicionado|ar-condicionado|climatiza|cabine.*nao gela|ar.*nao gela|ar.*parou de gelar|parou de gelar|sem gelar|nao esta gelando|nao gela|compressor.*ar|evaporador|condensador)/,
+  hvac: /(ar condicionado|ar-condicionado|climatiza|cabine.*nao gela|ar.*nao gela|ar.*parou de gelar|parou de gelar|sem gelar|nao esta gelando|nao gela|vaz.*ar condicionado|compressor.*ar|evaporador|condensador)/,
   electrical: /(bateria|alternador|motor de partida|nao pega|nao liga|painel apag|falha eletrica|chicote|fusivel)/,
 };
 
@@ -110,6 +110,20 @@ function candidate(title: string, message: string, potential: CommercialInsight[
   return { title, message, potential, score, kind };
 }
 
+function hourScore(hourmeter: number) {
+  if (hourmeter >= 15000) return 4;
+  if (hourmeter >= 12000) return 3;
+  if (hourmeter >= 8000) return 2;
+  return 0;
+}
+
+function potentialFromScore(score: number): CommercialInsight['potential'] {
+  if (score >= 14) return 'Estratégico';
+  if (score >= 11) return 'Muito alto';
+  if (score >= 8) return 'Alto';
+  return 'Médio';
+}
+
 function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, clientMachineCount: number) {
   const current = fold(text);
   const currentCategory = classify(current);
@@ -141,12 +155,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
 
   if (currentCategory === 'engine') {
     const strong = /(barulho.*motor|ruido.*motor|motor.*barulho|motor.*ruido|fumac|consumo.*oleo|blow by|baixa compress|limalha|metal.*oleo|pressao.*oleo|falha grave.*motor)/.test(current);
-    const score = (strong ? 5 : 0) + (hourmeter >= 12000 ? 3 : 0) + (stats.engine.last24m >= 2 ? 4 : stats.engine.last24m ? 2 : 0);
-    if (score >= 8) {
+    const score = (strong ? 5 : 0) + hourScore(hourmeter) + (stats.engine.last24m >= 2 ? 4 : stats.engine.last24m ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Motor',
-        `O relato atual está relacionado ao motor${hourmeter ? ` e a máquina possui ${Math.round(hourmeter).toLocaleString('pt-BR')} h informadas` : ''}${stats.engine.last24m ? `, com ${stats.engine.last24m} ocorrência(s) de motor nos últimos 24 meses` : ''}. Caso o diagnóstico confirme necessidade de intervenção maior, vale avaliar reparo estruturado ou Reman em vez de novas intervenções parciais.`,
-        score >= 11 ? 'Muito alto' : 'Alto',
+        `O relato atual aponta para um tema de motor${hourmeter ? ` em uma máquina com ${Math.round(hourmeter).toLocaleString('pt-BR')} h` : ''}. Vale levar o histórico de intervenções do motor para o atendimento e, caso a avaliação técnica confirme desgaste relevante ou necessidade de intervenção maior, considerar uma solução estruturada ou Reman em vez de uma nova intervenção isolada.`,
+        potentialFromScore(score),
         score,
         'engine',
       ));
@@ -155,12 +169,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
 
   if (currentCategory === 'cooling') {
     const strong = /(vaz.*liquido|vaz.*agua|arrefecimento|superaquec|fervendo|temperatura.*motor)/.test(current);
-    const score = (strong ? 4 : 0) + (hourmeter >= 12000 ? 2 : 0) + (stats.cooling.last24m >= 2 ? 4 : stats.cooling.last24m ? 2 : 0) + (stats.engine.last24m >= 2 ? 2 : 0);
-    if (score >= 8) {
+    const score = (strong ? 4 : 0) + hourScore(hourmeter) + (stats.cooling.last24m >= 2 ? 4 : stats.cooling.last24m ? 2 : 0) + (stats.engine.last24m >= 2 ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
-        'Oportunidade identificada: Arrefecimento / Motor',
-        `O atendimento atual envolve o sistema de arrefecimento${stats.cooling.last24m ? ` e há ${stats.cooling.last24m} ocorrência(s) relacionadas nos últimos 24 meses` : ''}. Se a avaliação técnica apontar reincidência ou impacto maior no motor, pode existir oportunidade de uma solução mais ampla em vez de tratar somente o evento atual.`,
-        score >= 11 ? 'Muito alto' : 'Alto',
+        'Oportunidade identificada: Arrefecimento',
+        `O atendimento atual envolve o sistema de arrefecimento${hourmeter ? ` e a máquina está com ${Math.round(hourmeter).toLocaleString('pt-BR')} h` : ''}. Vale consultar se já existem intervenções relacionadas e, se a avaliação técnica apontar reincidência ou comprometimento maior do sistema, considerar uma solução mais ampla em vez de tratar somente o evento atual.`,
+        potentialFromScore(score),
         score,
         'cooling',
       ));
@@ -169,27 +183,28 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
 
   if (currentCategory === 'hvac') {
     const recurrence = stats.hvac.last24m;
-    const score = (recurrence >= 3 ? 6 : recurrence >= 2 ? 4 : recurrence ? 2 : 0) + (clientMachineCount >= 5 ? 2 : 0);
-    if (score >= 8) {
+    const currentFailure = /(nao gela|sem gelar|parou de gelar|vaz.*ar condicionado|compressor|evaporador|condensador)/.test(current);
+    const score = (currentFailure ? 4 : 0) + hourScore(hourmeter) + (recurrence >= 3 ? 5 : recurrence >= 2 ? 3 : recurrence ? 2 : 0) + (clientMachineCount >= 5 ? 1 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
-        'Oportunidade identificada: Climatização da frota',
-        `A climatização voltou a aparecer no histórico desta máquina${recurrence ? ` (${recurrence} ocorrência(s) em 24 meses)` : ''}. Como há recorrência, pode valer estruturar uma abordagem preventiva/comercial de climatização em vez de tratar cada ocorrência de forma isolada.`,
-        'Alto',
+        'Oportunidade identificada: Climatização',
+        `O atendimento atual envolve o sistema de climatização${hourmeter ? ` em uma máquina com ${Math.round(hourmeter).toLocaleString('pt-BR')} h` : ''}${recurrence ? ` e há ${recurrence} ocorrência(s) relacionadas nos últimos 24 meses` : ''}. Se a avaliação técnica confirmar necessidade de intervenção mais ampla, pode valer estruturar o serviço do sistema de climatização em vez de tratar apenas o sintoma atual.`,
+        potentialFromScore(score),
         score,
-        'hvac_recurrence',
+        'hvac',
       ));
     }
   }
 
   if (currentCategory === 'undercarriage') {
     const repeated = stats.undercarriage.last12m;
-    let score = (hourmeter >= 8000 ? 3 : 0) + (hourmeter >= 10000 ? 2 : 0) + (repeated >= 3 ? 5 : repeated >= 2 ? 3 : 0);
-    if (/(esteira solt|regulagem.*esteira|corrente|sapata|roda guia|sprocket|rolete|material rodante)/.test(current)) score += 3;
-    if (score >= 8) {
+    let score = hourScore(hourmeter) + (repeated >= 3 ? 5 : repeated >= 2 ? 3 : 0);
+    if (/(esteira solt|regulagem.*esteira|corrente|sapata|roda guia|sprocket|rolete|material rodante)/.test(current)) score += 4;
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Material Rodante',
         `O atendimento atual e o contexto da máquina justificam avaliar o conjunto de material rodante${repeated ? `, com ${repeated} ocorrência(s) relacionadas nos últimos 12 meses` : ''}. Vale verificar a última medição e, se houver desgaste distribuído, considerar uma renovação planejada em vez de trocas isoladas.`,
-        score >= 11 ? 'Muito alto' : 'Alto',
+        potentialFromScore(score),
         score,
         'undercarriage',
       ));
@@ -198,12 +213,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
 
   if (currentCategory === 'transmission') {
     const strong = /(patin|limalha|metal|nao engata|tranco|falha persistente)/.test(current);
-    const score = (strong ? 5 : 0) + (hourmeter >= 12000 ? 3 : 0) + (stats.transmission.last24m >= 2 ? 5 : stats.transmission.last24m ? 2 : 0);
-    if (score >= 8) {
+    const score = (strong ? 5 : 0) + hourScore(hourmeter) + (stats.transmission.last24m >= 2 ? 5 : stats.transmission.last24m ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Transmissão',
-        'Há contexto suficiente para acompanhar uma oportunidade de alto valor na transmissão. Se o diagnóstico confirmar desgaste interno, vale avaliar reparo estruturado/recondicionamento e disponibilidade de Reman.',
-        score >= 11 ? 'Muito alto' : 'Alto',
+        'Há contexto suficiente para acompanhar uma oportunidade na transmissão. Se o diagnóstico confirmar desgaste interno, vale avaliar reparo estruturado/recondicionamento e disponibilidade de Reman.',
+        potentialFromScore(score),
         score,
         'transmission',
       ));
@@ -211,12 +226,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
   }
 
   if (currentCategory === 'axle') {
-    const score = (/(limalha|metal|ruido|diferencial|redutor final)/.test(current) ? 4 : 0) + (stats.axle.last24m >= 2 ? 5 : stats.axle.last24m ? 2 : 0) + (hourmeter >= 12000 ? 2 : 0);
-    if (score >= 8) {
+    const score = (/(limalha|metal|ruido|diferencial|redutor final)/.test(current) ? 4 : 0) + hourScore(hourmeter) + (stats.axle.last24m >= 2 ? 5 : stats.axle.last24m ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Eixo / Diferencial',
         'Se a avaliação técnica confirmar desgaste relevante, vale estruturar uma solução de conjunto em vez de sucessivas intervenções isoladas.',
-        score >= 11 ? 'Muito alto' : 'Alto',
+        potentialFromScore(score),
         score,
         'axle',
       ));
@@ -225,12 +240,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
 
   if (currentCategory === 'hydraulics') {
     const major = /(bomba|motor de giro|motor de translacao|contaminacao|cilindro)/.test(current);
-    const score = (major ? 5 : 0) + (stats.hydraulics.last24m >= 3 ? 4 : stats.hydraulics.last24m >= 2 ? 2 : 0) + (hourmeter >= 12000 ? 2 : 0);
-    if (score >= 8) {
+    const score = (major ? 5 : 0) + hourScore(hourmeter) + (stats.hydraulics.last24m >= 3 ? 4 : stats.hydraulics.last24m >= 2 ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Sistema Hidráulico',
         'Caso o diagnóstico confirme desgaste relevante, vale avaliar solução de conjunto, reparo/substituição ou Reman quando aplicável, em vez de continuar somente com intervenções pontuais.',
-        score >= 11 ? 'Muito alto' : 'Alto',
+        potentialFromScore(score),
         score,
         'hydraulics',
       ));
@@ -238,12 +253,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
   }
 
   if (currentCategory === 'implements') {
-    const score = (/(rocha|pedreira|mineracao|abrasiv|demolicao)/.test(current) ? 3 : 0) + (/(cacamba|dente|adaptador|rompedor|acoplador)/.test(current) ? 4 : 0) + (stats.implements.last12m >= 3 ? 4 : stats.implements.last12m >= 2 ? 2 : 0);
-    if (score >= 8) {
+    const score = (/(rocha|pedreira|mineracao|abrasiv|demolicao)/.test(current) ? 3 : 0) + (/(cacamba|dente|adaptador|rompedor|acoplador)/.test(current) ? 4 : 0) + hourScore(hourmeter) + (stats.implements.last12m >= 3 ? 4 : stats.implements.last12m >= 2 ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Implementos / GET',
         'A combinação do atendimento atual com o histórico/aplicação pode justificar uma solução de implemento, GET ou pacote de desgaste mais adequado, em vez de reposições isoladas recorrentes.',
-        score >= 11 ? 'Muito alto' : 'Alto',
+        potentialFromScore(score),
         score,
         'implements',
       ));
@@ -251,12 +266,12 @@ function buildCandidates(text: string, hourmeter: number, stats: CategoryStats, 
   }
 
   if (currentCategory === 'structure') {
-    const score = (/(trinca|folga)/.test(current) ? 5 : 0) + (stats.structure.last24m >= 2 ? 5 : stats.structure.last24m ? 2 : 0) + (hourmeter >= 12000 ? 2 : 0);
-    if (score >= 8) {
+    const score = (/(trinca|folga)/.test(current) ? 5 : 0) + hourScore(hourmeter) + (stats.structure.last24m >= 2 ? 5 : stats.structure.last24m ? 2 : 0);
+    if (score >= 6) {
       candidates.push(candidate(
         'Oportunidade identificada: Estrutura / Articulações',
         'Se a avaliação técnica apontar desgaste distribuído ou reincidência, vale analisar uma recuperação mais ampla em parada programada em vez de novos reparos isolados.',
-        score >= 11 ? 'Muito alto' : 'Alto',
+        potentialFromScore(score),
         score,
         'structure',
       ));
@@ -316,6 +331,6 @@ export async function buildCommercialInsight(
   const clientMachineCount = Number((clientResult.data || [])[0]?.machine_count || 0);
   const candidates = buildCandidates(currentText, hourmeter, stats, clientMachineCount).sort((a, b) => b.score - a.score);
   const best = candidates[0] || null;
-  if (!best || best.score < 8) return null;
+  if (!best || best.score < 6) return null;
   return best;
 }
