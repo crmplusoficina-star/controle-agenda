@@ -81,7 +81,8 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     let cancelled = false;
     let timer: number | undefined;
 
-    if (!draft?.equipment_serial.trim()) {
+    const descriptionReady = Boolean(draft && draft.description.trim().length >= 4);
+    if (!draft || !descriptionReady) {
       setInsight(null);
       setInsightBusy(false);
       return () => { cancelled = true; };
@@ -90,8 +91,11 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     timer = window.setTimeout(async () => {
       setInsightBusy(true);
       try {
+        const recurrencePromise = draft.equipment_serial.trim()
+          ? buildRecurrenceCommercialInsight(draft)
+          : Promise.resolve(null);
         const [recurrence, general] = await Promise.all([
-          buildRecurrenceCommercialInsight(draft),
+          recurrencePromise,
           buildCommercialInsight(draft, machineContext, lastHourmeter),
         ]);
         const result = [recurrence, general]
@@ -116,6 +120,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     draft?.service_reason,
     draft?.description,
     draft?.reported_hourmeter,
+    machineContext?.serial,
     machineContext?.last_operation_type,
     machineContext?.service_count,
     lastHourmeter?.hourmeter,
