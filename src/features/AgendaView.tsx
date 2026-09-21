@@ -254,7 +254,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
     const { data, error } = await supabase
       .from('appointments')
       .insert(payload)
-      .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status')
+      .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status,created_at')
       .single();
     if (!error && data) {
       const inserted = data as Appointment;
