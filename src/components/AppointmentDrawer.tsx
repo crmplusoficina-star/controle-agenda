@@ -3,9 +3,8 @@ import type { FormEvent } from 'react';
 import { Check, Loader2, MessageCircle, Route, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
-import type { MachineSummary, Technician } from '../types';
+import type { AppointmentRouteMetric, MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
-import { agendaWeekBounds, calculateAgendaRouteDistances, type AppointmentRouteDistance, type RouteAppointmentInput } from '../lib/agendaRouteDistances';
 
 const reasons = [
   'Garantia',
@@ -56,7 +55,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   onSerialChange: (value: string) => void;
 }) {
   const [clientContact, setClientContact] = useState('');
-  const [routePreview, setRoutePreview] = useState<AppointmentRouteDistance | null>(null);
+  const [routePreview, setRoutePreview] = useState<AppointmentRouteMetric | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const waNumber = whatsappNumber(clientContact);
@@ -90,91 +89,30 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
 
   useEffect(() => {
     let cancelled = false;
-    let timer = 0;
 
-    if (!draft?.technician_id || !draft.appointment_date) {
-      setRoutePreview(null);
-      setRouteBusy(false);
-      return () => { cancelled = true; };
-    }
-
-    const technician = technicians.find((item) => item.id === draft.technician_id);
-    const hasDestination = Boolean(
-      draft.service_city.trim()
-      || draft.client_name.trim()
-      || draft.service_reason === 'Retorno à filial',
-    );
-    if (!technician || !hasDestination) {
+    if (!draft?.id) {
       setRoutePreview(null);
       setRouteBusy(false);
       return () => { cancelled = true; };
     }
 
     setRouteBusy(true);
-    timer = window.setTimeout(async () => {
-      const bounds = agendaWeekBounds(draft.appointment_date);
+    async function loadStoredRouteMetric() {
       const { data, error } = await supabase
-        .from('appointments')
-        .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,service_reason,description,created_at')
-        .eq('technician_id', draft.technician_id)
-        .gte('appointment_date', bounds.start)
-        .lte('appointment_date', bounds.end)
-        .order('appointment_date');
+        .from('agenda_route_metrics')
+        .select('appointment_id,technician_id,appointment_date,week_start,origin_kind,origin_appointment_id,origin_label,destination_label,destination_city,destination_state,distance_km,duration_min,status,provider,segment_key,calculated_at')
+        .eq('appointment_id', draft!.id)
+        .maybeSingle();
 
       if (cancelled) return;
-      if (error) {
-        setRoutePreview({
-          distance_km: null,
-          duration_min: null,
-          from_label: 'Atendimento anterior',
-          to_label: draft.service_city || draft.branch,
-          status: 'unavailable',
-          reason: 'Não foi possível consultar a rota agora.',
-        });
-        setRouteBusy(false);
-        return;
-      }
+      if (error) console.error('appointment_route_metric_load_failed', error);
+      setRoutePreview((data || null) as AppointmentRouteMetric | null);
+      setRouteBusy(false);
+    }
 
-      const rows = (data || []) as RouteAppointmentInput[];
-      const stored = draft.id ? rows.find((item) => item.id === draft.id) : null;
-      const previewId = draft.id || '__route_preview__';
-      const preview: RouteAppointmentInput = {
-        id: previewId,
-        branch: draft.branch || technician.branch,
-        appointment_date: draft.appointment_date,
-        technician_id: draft.technician_id,
-        client_name: draft.client_name.trim() || null,
-        equipment_serial: draft.equipment_serial.trim() || null,
-        service_city: draft.service_city.trim() || null,
-        service_reason: draft.service_reason || null,
-        description: draft.description.trim() || null,
-        created_at: stored?.created_at || '9999-12-31T23:59:59.999Z',
-      };
-
-      const routeRows = [...rows.filter((item) => item.id !== draft.id), preview];
-      const distances = await calculateAgendaRouteDistances(routeRows, [technician]);
-      if (!cancelled) {
-        setRoutePreview(distances[previewId] || null);
-        setRouteBusy(false);
-      }
-    }, 500);
-
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [
-    draft?.id,
-    draft?.branch,
-    draft?.appointment_date,
-    draft?.technician_id,
-    draft?.client_name,
-    draft?.equipment_serial,
-    draft?.service_city,
-    draft?.service_reason,
-    draft?.description,
-    technicians,
-  ]);
+    void loadStoredRouteMetric();
+    return () => { cancelled = true; };
+  }, [draft?.id]);
 
   return <Drawer open={Boolean(draft)} title={draft?.id ? 'Editar atendimento' : 'Novo atendimento'} subtitle="Somente o necessário para organizar bem a visita." onClose={onClose} wide>
     {draft && <form className="form-stack" onSubmit={onSubmit}>
@@ -187,14 +125,30 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
           <span style={{ width: 34, height: 34, borderRadius: 8, background: '#f1f5f9', color: '#475569', display: 'grid', placeItems: 'center' }}>{routeBusy ? <Loader2 className="spin" size={16}/> : <Route size={16}/>}</span>
           <input
             readOnly
-            value={routeBusy ? 'Calculando...' : routePreview?.status === 'ok' && routePreview.distance_km != null ? `${routePreview.distance_km.toLocaleString('pt-BR')} km` : routePreview?.status === 'unavailable' ? 'Não foi possível calcular' : 'Automático'}
+            value={routeBusy
+              ? 'Carregando da nuvem...'
+              : routePreview?.status === 'ready' && routePreview.distance_km != null
+                ? `${routePreview.distance_km.toLocaleString('pt-BR')} km`
+                : routePreview?.status === 'location_missing'
+                  ? 'Localização pendente'
+                  : routePreview?.status === 'route_unavailable'
+                    ? 'Rota pendente'
+                    : draft.id
+                      ? 'Em processamento na nuvem'
+                      : 'Calculado na nuvem após salvar'}
             style={{ background: '#f8fafc', color: '#475569', cursor: 'default' }}
           />
         </div>
         <small style={{ marginTop: 5, color: '#94a3b8', fontWeight: 500 }}>
-          {routePreview?.status === 'ok'
-            ? `${routePreview.from_label} → ${routePreview.to_label}${routePreview.duration_min != null ? ` · ~${routePreview.duration_min} min` : ''}`
-            : routePreview?.reason || 'O primeiro atendimento da semana parte da filial; os seguintes usam o atendimento anterior como origem.'}
+          {routePreview?.status === 'ready'
+            ? `${routePreview.origin_label || 'Origem'} → ${routePreview.destination_label || draft.service_city || 'Destino'}${routePreview.duration_min != null ? ` · ~${routePreview.duration_min} min` : ''}`
+            : routePreview?.status === 'location_missing'
+              ? 'A nuvem ainda está resolvendo a cidade/UF deste atendimento.'
+              : routePreview?.status === 'route_unavailable'
+                ? 'O worker cloud tentará novamente automaticamente.'
+                : draft.id
+                  ? 'Aguardando processamento do worker cloud.'
+                  : 'Após salvar, a rota entra na fila SQL e é calculada na nuvem.'}
         </small>
       </label>
       <label>Contato do cliente <span style={{ color: '#94a3b8', fontWeight: 500 }}>(opcional)</span>
