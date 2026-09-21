@@ -107,7 +107,7 @@ export default function App() {
     const end = addDays(weekStart, 5);
     const branchFilter = effectiveBranchValues(branch, branches);
     let tq = supabase.from('technicians').select('id,branch,name,active').eq('active', true).order('name');
-    let aq = supabase.from('appointments').select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status').gte('appointment_date', isoDate(weekStart)).lte('appointment_date', isoDate(end)).order('appointment_date');
+    let aq = supabase.from('appointments').select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status,created_at').gte('appointment_date', isoDate(weekStart)).lte('appointment_date', isoDate(end)).order('appointment_date');
     tq = tq.in('branch', branchFilter);
     aq = aq.in('branch', branchFilter);
     const [t, a] = await Promise.all([tq, aq]);
