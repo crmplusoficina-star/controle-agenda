@@ -579,15 +579,16 @@ async function processJob(
 }
 
 async function syncSource(db: any, mode: string) {
-  const { data: sourceConfigRow, error: configError } = await db
+  const { data: sourceConfigRow } = await db
     .from('agenda_route_sync_state')
     .select('value')
     .eq('key', 'source_supabase')
-    .single();
-  if (configError) throw configError;
+    .maybeSingle();
   const sourceUrl = String(sourceConfigRow?.value?.url || '').replace(/\/$/, '');
   const sourceKey = String(sourceConfigRow?.value?.anon_key || '');
-  if (!sourceUrl || !sourceKey) throw new Error('source_supabase_not_configured');
+  if (!sourceUrl || !sourceKey || !(await probeSource(sourceUrl, sourceKey))) {
+    return { waiting_source_registration: true, full: false, appointments: 0, technicians: 0 };
+  }
 
   const { data: syncRow } = await db
     .from('agenda_route_sync_state')
@@ -727,6 +728,24 @@ Deno.serve(async (req: Request) => {
 
     const sync = await syncSource(db, String(body?.mode || 'scheduled'));
 
+    const { data: jobs, error: jobsError } = await db.rpc('claim_agenda_route_jobs', { p_limit: JOB_LIMIT });
+    if (jobsError) throw jobsError;
+
+    if (!(jobs || []).length) {
+      const { count: queueRemaining } = await db
+        .from('agenda_route_recalc_queue')
+        .select('*', { count: 'exact', head: true });
+      return new Response(JSON.stringify({
+        ok: true,
+        sync,
+        processed: 0,
+        failed: 0,
+        queue_remaining: queueRemaining || 0,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+
     const [{ data: branchRows }, { data: technicianRows }, { data: overrideRows }, { data: evidenceRows }] = await Promise.all([
       db.from('agenda_route_branch_locations').select('branch,label,lat,lng'),
       db.from('agenda_route_source_technicians').select('id,branch,name,active'),
@@ -746,8 +765,6 @@ Deno.serve(async (req: Request) => {
     }
 
     const evidence = (evidenceRows || []) as G4Location[];
-    const { data: jobs, error: jobsError } = await db.rpc('claim_agenda_route_jobs', { p_limit: JOB_LIMIT });
-    if (jobsError) throw jobsError;
 
     let processed = 0;
     let failed = 0;
