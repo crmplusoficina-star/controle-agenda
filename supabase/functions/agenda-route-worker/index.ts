@@ -142,6 +142,25 @@ async function sha256(value: string) {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+async function probeSource(sourceUrl: string, sourceKey: string) {
+  try {
+    const base = sourceUrl.replace(/\/$/, '');
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(base)) return false;
+    const headers = {
+      apikey: sourceKey,
+      Authorization: `Bearer ${sourceKey}`,
+      Accept: 'application/json',
+    };
+    const [technicians, appointments] = await Promise.all([
+      fetch(`${base}/rest/v1/technicians?select=id&limit=1`, { headers }),
+      fetch(`${base}/rest/v1/appointments?select=id&limit=1`, { headers }),
+    ]);
+    return technicians.ok && appointments.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchSourceRows(
   sourceUrl: string,
   sourceKey: string,
@@ -655,6 +674,41 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json().catch(() => ({}));
+
+    if (String(body?.mode || '') === 'register_source') {
+      const sourceUrl = String(body?.source_url || '').replace(/\/$/, '');
+      const sourceKey = String(body?.source_key || '');
+      if (!sourceUrl || !sourceKey || !(await probeSource(sourceUrl, sourceKey))) {
+        return new Response(JSON.stringify({ error: 'invalid_source' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const { data: current } = await db
+        .from('agenda_route_sync_state')
+        .select('value')
+        .eq('key', 'source_supabase')
+        .maybeSingle();
+
+      const currentUrl = String(current?.value?.url || '').replace(/\/$/, '');
+      const currentKey = String(current?.value?.anon_key || '');
+      const currentValid = Boolean(currentUrl && currentKey && await probeSource(currentUrl, currentKey));
+
+      if (!currentValid) {
+        await db.from('agenda_route_sync_state').upsert({
+          key: 'source_supabase',
+          value: { url: sourceUrl, anon_key: sourceKey },
+          updated_at: new Date().toISOString(),
+        });
+        await db.from('agenda_route_sync_state').delete().eq('key', 'appointments_source');
+      }
+
+      return new Response(JSON.stringify({ ok: true, registered: !currentValid }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+
     const { data: secretRow, error: secretError } = await db
       .from('agenda_route_sync_state')
       .select('value')
