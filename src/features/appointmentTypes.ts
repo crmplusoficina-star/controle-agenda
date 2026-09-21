@@ -18,6 +18,7 @@ export const APPOINTMENT_TYPE_STYLES: Record<string, AppointmentTypeStyle> = {
   'Deslocamento garantia': { color: '#f4b183', background: '#fff6ef' },
   'Deslocamento cliente': { color: '#203864', background: '#f1f4f9' },
   'Deslocamento PMP': { color: '#7030a0', background: '#f7f0fb' },
+  'Retorno à filial': { color: '#475569', background: '#f8fafc' },
   'Folga': { color: '#c00000', background: '#fff0f0' },
   'Sem agenda': { color: '#00b050', background: '#eefaf2' },
   'Treinamento': { color: '#0070c0', background: '#eef7fd' },
