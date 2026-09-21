@@ -13,7 +13,7 @@ import { RetentionView } from './features/RetentionView';
 import { FollowupView } from './features/FollowupView';
 import { DashboardView } from './features/DashboardView';
 import { AdminUsersView } from './features/AdminUsersView';
-import { supabase } from './lib/supabase';
+import { registerAgendaRouteSource, supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
 import { emptyAppointment, emptyFollowup } from './drafts';
 import type { AppointmentDraft, FollowupDraft } from './drafts';
@@ -97,6 +97,12 @@ export default function App() {
     setBranch(defaultBranches.length ? defaultBranches.join(MULTI_SEPARATOR) : ALL);
     setTechBranch(defaultBranches[0] || availableBranches[0]?.name || '');
   }, [availableBranches, defaultBranches]);
+
+  useEffect(() => {
+    void registerAgendaRouteSource().catch((error) => {
+      console.error('agenda_route_source_registration_failed', error);
+    });
+  }, []);
 
   const loadAgenda = useCallback(async () => {
     if (!branches.length) {
