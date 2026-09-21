@@ -23,6 +23,25 @@ export type Appointment = {
   technician?: Technician | null;
 };
 
+export type AppointmentRouteMetric = {
+  appointment_id: string;
+  technician_id: string;
+  appointment_date: string;
+  week_start: string;
+  origin_kind: string;
+  origin_appointment_id: string | null;
+  origin_label: string | null;
+  destination_label: string | null;
+  destination_city: string | null;
+  destination_state: string | null;
+  distance_km: number | null;
+  duration_min: number | null;
+  status: 'ready' | 'location_missing' | 'route_unavailable' | 'ignored';
+  provider: string | null;
+  segment_key: string | null;
+  calculated_at: string;
+};
+
 export type MachineSummary = {
   serial: string;
   client_name: string | null;
