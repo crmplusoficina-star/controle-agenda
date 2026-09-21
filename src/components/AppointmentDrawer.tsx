@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Check, Loader2, MessageCircle, Trash2 } from 'lucide-react';
+import { Check, Loader2, MessageCircle, Route, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
 import type { MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
+import { agendaWeekBounds, calculateAgendaRouteDistances, type AppointmentRouteDistance, type RouteAppointmentInput } from '../lib/agendaRouteDistances';
 
 const reasons = [
   'Garantia',
@@ -21,6 +22,7 @@ const reasons = [
   'Deslocamento garantia',
   'Deslocamento cliente',
   'Deslocamento PMP',
+  'Retorno à filial',
   'Folga',
   'Sem agenda',
   'Treinamento',
@@ -54,6 +56,8 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   onSerialChange: (value: string) => void;
 }) {
   const [clientContact, setClientContact] = useState('');
+  const [routePreview, setRoutePreview] = useState<AppointmentRouteDistance | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const waNumber = whatsappNumber(clientContact);
 
@@ -84,12 +88,115 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     }, { onConflict: 'client_key' });
   }
 
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+
+    if (!draft?.technician_id || !draft.appointment_date) {
+      setRoutePreview(null);
+      setRouteBusy(false);
+      return () => { cancelled = true; };
+    }
+
+    const technician = technicians.find((item) => item.id === draft.technician_id);
+    const hasDestination = Boolean(
+      draft.service_city.trim()
+      || draft.client_name.trim()
+      || draft.service_reason === 'Retorno à filial',
+    );
+    if (!technician || !hasDestination) {
+      setRoutePreview(null);
+      setRouteBusy(false);
+      return () => { cancelled = true; };
+    }
+
+    setRouteBusy(true);
+    timer = window.setTimeout(async () => {
+      const bounds = agendaWeekBounds(draft.appointment_date);
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,service_reason,description,created_at')
+        .eq('technician_id', draft.technician_id)
+        .gte('appointment_date', bounds.start)
+        .lte('appointment_date', bounds.end)
+        .order('appointment_date');
+
+      if (cancelled) return;
+      if (error) {
+        setRoutePreview({
+          distance_km: null,
+          duration_min: null,
+          from_label: 'Atendimento anterior',
+          to_label: draft.service_city || draft.branch,
+          status: 'unavailable',
+          reason: 'Não foi possível consultar a rota agora.',
+        });
+        setRouteBusy(false);
+        return;
+      }
+
+      const rows = (data || []) as RouteAppointmentInput[];
+      const stored = draft.id ? rows.find((item) => item.id === draft.id) : null;
+      const previewId = draft.id || '__route_preview__';
+      const preview: RouteAppointmentInput = {
+        id: previewId,
+        branch: draft.branch || technician.branch,
+        appointment_date: draft.appointment_date,
+        technician_id: draft.technician_id,
+        client_name: draft.client_name.trim() || null,
+        equipment_serial: draft.equipment_serial.trim() || null,
+        service_city: draft.service_city.trim() || null,
+        service_reason: draft.service_reason || null,
+        description: draft.description.trim() || null,
+        created_at: stored?.created_at || '9999-12-31T23:59:59.999Z',
+      };
+
+      const routeRows = [...rows.filter((item) => item.id !== draft.id), preview];
+      const distances = await calculateAgendaRouteDistances(routeRows, [technician]);
+      if (!cancelled) {
+        setRoutePreview(distances[previewId] || null);
+        setRouteBusy(false);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [
+    draft?.id,
+    draft?.branch,
+    draft?.appointment_date,
+    draft?.technician_id,
+    draft?.client_name,
+    draft?.equipment_serial,
+    draft?.service_city,
+    draft?.service_reason,
+    draft?.description,
+    technicians,
+  ]);
+
   return <Drawer open={Boolean(draft)} title={draft?.id ? 'Editar atendimento' : 'Novo atendimento'} subtitle="Somente o necessário para organizar bem a visita." onClose={onClose} wide>
     {draft && <form className="form-stack" onSubmit={onSubmit}>
-      <div className="form-grid two"><label>Data<input type="date" value={draft.appointment_date} onChange={(e) => setDraft({ ...draft, appointment_date: e.target.value })} /></label><label>Técnico<select value={draft.technician_id} onChange={(e) => { const t = technicians.find((x) => x.id === e.target.value); setDraft({ ...draft, technician_id: e.target.value, branch: t?.branch || draft.branch }); }}><option value="">Selecione o técnico</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.branch}</option>)}</select></label></div>
+      <div className="form-grid two"><label>Data<input type="date" value={draft.appointment_date} onChange={(e) => setDraft({ ...draft, appointment_date: e.target.value })} /></label><label>Técnico<select value={draft.technician_id} onChange={(e) => { const t = technicians.find((x) => x.id === e.target.value); const nextBranch = t?.branch || draft.branch; setDraft({ ...draft, technician_id: e.target.value, branch: nextBranch, service_city: draft.service_reason === 'Retorno à filial' ? nextBranch : draft.service_city }); }}><option value="">Selecione o técnico</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.branch}</option>)}</select></label></div>
       <label className="serial-field">Série da máquina<input value={draft.equipment_serial} onChange={(e) => onSerialChange(e.target.value.toUpperCase())} placeholder="Digite parte da série" autoComplete="off" />{suggestions.length > 0 && <div className="suggestions">{suggestions.map((m) => <button type="button" key={m.serial} onClick={() => onSelectMachine(m)}><strong>{m.serial}</strong><span>{m.client_name || 'Cliente não informado'} · {m.city || 'Cidade não informada'}</span></button>)}</div>}</label>
       {machineContext && <div className="context-strip"><div><span>Último atendimento G4</span><strong>{machineContext.last_service_at ? new Intl.DateTimeFormat('pt-BR').format(new Date(machineContext.last_service_at)) : '—'}</strong></div><div><span>Histórico</span><strong>{machineContext.service_count} OS</strong></div><div><span>Última operação</span><strong>{machineContext.last_operation_type || '—'}</strong></div></div>}
       <div className="form-grid two"><label>Cliente<input value={draft.client_name} onChange={(e) => setDraft({ ...draft, client_name: e.target.value })} /></label><label>Cidade<input value={draft.service_city} onChange={(e) => setDraft({ ...draft, service_city: e.target.value })} /></label></div>
+      <label>Distância do último atendimento <span style={{ color: '#94a3b8', fontWeight: 500 }}>(automático)</span>
+        <div style={{ display: 'grid', gridTemplateColumns: '34px 1fr', gap: 8, alignItems: 'center' }}>
+          <span style={{ width: 34, height: 34, borderRadius: 8, background: '#f1f5f9', color: '#475569', display: 'grid', placeItems: 'center' }}>{routeBusy ? <Loader2 className="spin" size={16}/> : <Route size={16}/>}</span>
+          <input
+            readOnly
+            value={routeBusy ? 'Calculando...' : routePreview?.status === 'ok' && routePreview.distance_km != null ? `${routePreview.distance_km.toLocaleString('pt-BR')} km` : routePreview?.status === 'unavailable' ? 'Não foi possível calcular' : 'Automático'}
+            style={{ background: '#f8fafc', color: '#475569', cursor: 'default' }}
+          />
+        </div>
+        <small style={{ marginTop: 5, color: '#94a3b8', fontWeight: 500 }}>
+          {routePreview?.status === 'ok'
+            ? `${routePreview.from_label} → ${routePreview.to_label}${routePreview.duration_min != null ? ` · ~${routePreview.duration_min} min` : ''}`
+            : routePreview?.reason || 'O primeiro atendimento da semana parte da filial; os seguintes usam o atendimento anterior como origem.'}
+        </small>
+      </label>
       <label>Contato do cliente <span style={{ color: '#94a3b8', fontWeight: 500 }}>(opcional)</span>
         <div style={{ display: 'grid', gridTemplateColumns: waNumber ? '1fr auto' : '1fr', gap: 8, alignItems: 'center' }}>
           <input inputMode="tel" value={clientContact} onChange={(e) => setClientContact(e.target.value)} onBlur={() => { void saveClientContact(); }} placeholder="Ex.: (91) 99999-9999" />
@@ -97,7 +204,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         </div>
         <small style={{ marginTop: 5, color: '#94a3b8', fontWeight: 500 }}>Preencha uma vez. Nos próximos atendimentos do mesmo cliente, o número será carregado automaticamente.</small>
       </label>
-      <label>Motivo do atendimento<select value={draft.service_reason} onChange={(e) => setDraft({ ...draft, service_reason: e.target.value })}><option value="">Selecione</option>{reasons.map((r) => <option key={r}>{r}</option>)}</select></label>
+      <label>Motivo do atendimento<select value={draft.service_reason} onChange={(e) => { const nextReason = e.target.value; setDraft({ ...draft, service_reason: nextReason, service_city: nextReason === 'Retorno à filial' ? draft.branch : draft.service_city }); }}><option value="">Selecione</option>{reasons.map((r) => <option key={r}>{r}</option>)}</select></label>
       <label>Descrição<textarea rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Ex.: ar-condicionado com baixo rendimento" /></label>
 
       <div className="hourmeter-block"><div><span>Último horímetro conhecido</span><strong>{lastHourmeter ? `${lastHourmeter.hourmeter.toLocaleString('pt-BR')} h` : 'Sem leitura anterior'}</strong>{lastHourmeter && <small>{new Intl.DateTimeFormat('pt-BR').format(new Date(`${lastHourmeter.reading_date}T12:00:00`))}</small>}</div><label>Horímetro atual da máquina<input inputMode="decimal" value={draft.reported_hourmeter} onChange={(e) => setDraft({ ...draft, reported_hourmeter: e.target.value })} placeholder="Opcional" /></label>{lastHourmeter && draft.reported_hourmeter !== '' && Number(draft.reported_hourmeter) >= lastHourmeter.hourmeter && <div className="hourmeter-delta">+{(Number(draft.reported_hourmeter) - lastHourmeter.hourmeter).toLocaleString('pt-BR')} h</div>}</div>
