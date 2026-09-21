@@ -142,15 +142,20 @@ async function sha256(value: string) {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+function sourceHeaders(sourceKey: string) {
+  const headers: Record<string, string> = {
+    apikey: sourceKey,
+    Accept: 'application/json',
+  };
+  if (!sourceKey.startsWith('sb_publishable_')) headers.Authorization = `Bearer ${sourceKey}`;
+  return headers;
+}
+
 async function probeSource(sourceUrl: string, sourceKey: string) {
   try {
     const base = sourceUrl.replace(/\/$/, '');
     if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(base)) return false;
-    const headers = {
-      apikey: sourceKey,
-      Authorization: `Bearer ${sourceKey}`,
-      Accept: 'application/json',
-    };
+    const headers = sourceHeaders(sourceKey);
     const [technicians, appointments] = await Promise.all([
       fetch(`${base}/rest/v1/technicians?select=id&limit=1`, { headers }),
       fetch(`${base}/rest/v1/appointments?select=id&limit=1`, { headers }),
@@ -176,11 +181,7 @@ async function fetchSourceRows(
     url.searchParams.set('offset', String(offset));
     if (filter) for (const [key, value] of Object.entries(filter)) url.searchParams.set(key, value);
     const response = await fetch(url, {
-      headers: {
-        apikey: sourceKey,
-        Authorization: `Bearer ${sourceKey}`,
-        Accept: 'application/json',
-      },
+      headers: sourceHeaders(sourceKey),
     });
     if (!response.ok) throw new Error(`source_${table}_http_${response.status}`);
     const page = await response.json();
