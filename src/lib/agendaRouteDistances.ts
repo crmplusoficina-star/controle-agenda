@@ -95,16 +95,71 @@ function sortAppointments(a: RouteAppointmentInput, b: RouteAppointmentInput) {
     || a.id.localeCompare(b.id);
 }
 
+type RouteLeg = { distance?: number; duration?: number };
+
+const ROUTER_BASES = [
+  'https://router.project-osrm.org',
+  'https://routing.openstreetmap.de/routed-car',
+] as const;
+
+const routeMemoryCache = new Map<string, RouteLeg[]>();
+
+function routeKey(nodes: RouteNode[]) {
+  return nodes.map((node) => `${node.lat.toFixed(5)},${node.lng.toFixed(5)}`).join('|');
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 async function routeNodes(nodes: RouteNode[]) {
   if (nodes.length < 2) return null;
+  const key = routeKey(nodes);
+  const cached = routeMemoryCache.get(key);
+  if (cached) return cached;
+
   const coords = nodes.map((node) => `${node.lng},${node.lat}`).join(';');
-  const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=false&steps=false`);
-  if (!response.ok) throw new Error(`osrm_http_${response.status}`);
-  const json = await response.json();
-  const best = json?.routes?.[0];
-  const legs = best?.legs;
-  if (!Array.isArray(legs) || legs.length !== nodes.length - 1) throw new Error('osrm_invalid_route');
-  return legs as Array<{ distance?: number; duration?: number }>;
+  let lastError: unknown = null;
+
+  for (const base of ROUTER_BASES) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch(`${base}/route/v1/driving/${coords}?overview=false&steps=false`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error(`router_http_${response.status}`);
+        const json = await response.json();
+        const best = json?.routes?.[0];
+        const legs = best?.legs;
+        if (!Array.isArray(legs) || legs.length !== nodes.length - 1) throw new Error('router_invalid_route');
+        const normalized = legs as RouteLeg[];
+        routeMemoryCache.set(key, normalized);
+        return normalized;
+      } catch (error) {
+        lastError = error;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+      await wait(450 * (attempt + 1));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('router_unavailable');
+}
+
+async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
 }
 
 export async function calculateAgendaRouteDistances(
@@ -225,7 +280,7 @@ export async function calculateAgendaRouteDistances(
     }
   }
 
-  await Promise.all(jobs.map(async (nodes) => {
+  await runWithConcurrency(jobs, 2, async (nodes) => {
     try {
       const legs = await routeNodes(nodes);
       if (!legs) return;
@@ -240,21 +295,43 @@ export async function calculateAgendaRouteDistances(
           status: 'ok',
         };
       });
+      return;
     } catch {
-      for (let index = 1; index < nodes.length; index += 1) {
-        const destination = nodes[index];
-        if (!destination.appointmentId || result[destination.appointmentId]?.status === 'unavailable') continue;
+      // A rota completa pode falhar por limite/instabilidade do servidor.
+      // Nesse caso tentamos cada trecho separadamente para não perder a semana inteira.
+    }
+
+    const segments = Array.from({ length: nodes.length - 1 }, (_, index) => ({
+      index,
+      nodes: [nodes[index], nodes[index + 1]] as RouteNode[],
+    }));
+
+    await runWithConcurrency(segments, 1, async (segment) => {
+      const destination = segment.nodes[1];
+      if (!destination.appointmentId || result[destination.appointmentId]?.status === 'unavailable') return;
+      try {
+        const legs = await routeNodes(segment.nodes);
+        const leg = legs?.[0];
+        if (!leg) throw new Error('segment_without_leg');
+        result[destination.appointmentId] = {
+          distance_km: Math.round((Number(leg.distance || 0) / 1000) * 10) / 10,
+          duration_min: Math.round(Number(leg.duration || 0) / 60),
+          from_label: segment.nodes[0].label,
+          to_label: destination.label,
+          status: 'ok',
+        };
+      } catch {
         result[destination.appointmentId] = {
           distance_km: null,
           duration_min: null,
-          from_label: nodes[index - 1].label,
+          from_label: segment.nodes[0].label,
           to_label: destination.label,
           status: 'unavailable',
-          reason: 'A malha rodoviária não respondeu agora.',
+          reason: 'Não foi possível obter a rota rodoviária após novas tentativas.',
         };
       }
-    }
-  }));
+    });
+  });
 
   return result;
 }
