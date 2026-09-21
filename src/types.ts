@@ -19,6 +19,7 @@ export type Appointment = {
   reported_hourmeter: number | null;
   forecast_amount: number;
   billing_status: string;
+  created_at?: string | null;
   technician?: Technician | null;
 };
 
