@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Map, Plus, Share2, X } from 'lucide-react';
-import type { Appointment, Branch, ClientSummary, Technician } from '../types';
+import type { Appointment, AppointmentRouteMetric, Branch, ClientSummary, Technician } from '../types';
 import { addDays, isoDate, startOfWeek } from '../lib/date';
 import { supabase } from '../lib/supabase';
-import { calculateAgendaRouteDistances, type AppointmentRouteDistance } from '../lib/agendaRouteDistances';
 import { APPOINTMENT_TYPE_LEGEND, appointmentTypeStyle } from './appointmentTypes';
 import { RetentionMap } from './RetentionMap';
 import { AgendaShareModal } from './AgendaShareModal';
@@ -85,8 +84,8 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
   const [billingBusyId, setBillingBusyId] = useState<string | null>(null);
   const [reasonFilters, setReasonFilters] = useState<string[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
-  const [routeDistances, setRouteDistances] = useState<Record<string, AppointmentRouteDistance>>({});
-  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeMetrics, setRouteMetrics] = useState<Record<string, AppointmentRouteMetric>>({});
+  const [routeMetricsLoading, setRouteMetricsLoading] = useState(false);
 
   useEffect(() => {
     if (range === 'week') setAnchorDate(startOfWeek(weekStart));
@@ -157,45 +156,40 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
   useEffect(() => {
     let cancelled = false;
 
-    async function loadRouteDistances() {
-      if (!technicians.length || !allAppointments.length) {
+    async function loadRouteMetrics() {
+      const ids = allAppointments.map((item) => item.id).filter(Boolean);
+      if (!ids.length) {
         if (!cancelled) {
-          setRouteDistances({});
-          setRouteLoading(false);
+          setRouteMetrics({});
+          setRouteMetricsLoading(false);
         }
         return;
       }
 
-      setRouteLoading(true);
-      let routeAppointments = [...allAppointments];
-      const contextStartIso = isoDate(startOfWeek(periodStart));
-      if (contextStartIso < periodStartIso) {
-        const technicianIds = technicians.map((item) => item.id);
-        const { data } = await supabase
-          .from('appointments')
-          .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status,created_at')
-          .in('technician_id', technicianIds)
-          .gte('appointment_date', contextStartIso)
-          .lt('appointment_date', periodStartIso)
-          .order('appointment_date');
-
-        const knownIds = new Set(routeAppointments.map((item) => item.id));
-        routeAppointments = [
-          ...((data || []) as Appointment[]).filter((item) => !knownIds.has(item.id)),
-          ...routeAppointments,
-        ];
+      setRouteMetricsLoading(true);
+      const rows: AppointmentRouteMetric[] = [];
+      for (let index = 0; index < ids.length; index += 150) {
+        const batch = ids.slice(index, index + 150);
+        const { data, error } = await supabase
+          .from('agenda_route_metrics')
+          .select('appointment_id,technician_id,appointment_date,week_start,origin_kind,origin_appointment_id,origin_label,destination_label,destination_city,destination_state,distance_km,duration_min,status,provider,segment_key,calculated_at')
+          .in('appointment_id', batch);
+        if (error) {
+          console.error('agenda_route_metrics_load_failed', error);
+          continue;
+        }
+        rows.push(...((data || []) as AppointmentRouteMetric[]));
       }
 
-      const distances = await calculateAgendaRouteDistances(routeAppointments, technicians);
       if (!cancelled) {
-        setRouteDistances(distances);
-        setRouteLoading(false);
+        setRouteMetrics(Object.fromEntries(rows.map((item) => [item.appointment_id, item])));
+        setRouteMetricsLoading(false);
       }
     }
 
-    void loadRouteDistances();
+    void loadRouteMetrics();
     return () => { cancelled = true; };
-  }, [allAppointments, technicians, periodStartIso]);
+  }, [allAppointments]);
 
   const visibleAppointments = useMemo(() => reasonFilters.length
     ? allAppointments.filter((item) => reasonFilters.includes(item.service_reason || ''))
@@ -350,7 +344,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                 {allCellItems.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
                   const typeStyle = appointmentTypeStyle(item.service_reason);
                   const hasForecast = Number(item.forecast_amount || 0) > 0;
-                  const routeInfo = routeDistances[item.id];
+                  const routeInfo = routeMetrics[item.id];
                   const billingStatus: BillingStatus = item.billing_status === 'faturado'
                     ? 'faturado'
                     : item.billing_status === 'aguardando_faturamento'
@@ -370,13 +364,19 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                       <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
                       <span>{item.service_city || 'Cidade não informada'}</span>
                       <small className="appointment-card-reason">{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
-                      {routeInfo?.status === 'ok' && routeInfo.distance_km != null
-                        ? <small className="appointment-card-distance" title={`${routeInfo.from_label} → ${routeInfo.to_label} · ${routeInfo.duration_min ?? 0} min`}>🚙 {routeInfo.distance_km.toLocaleString('pt-BR')} km · de {routeInfo.from_label}</small>
-                        : routeInfo?.status === 'unavailable'
-                          ? <small className="appointment-card-distance is-unavailable" title={routeInfo.reason || 'Distância indisponível'}>🚙 km —</small>
-                          : routeLoading && (item.service_city || item.client_name)
-                            ? <small className="appointment-card-distance is-loading">Calculando km...</small>
-                            : null}
+                      {routeInfo?.status === 'ready' && routeInfo.distance_km != null
+                        ? <small className="appointment-card-distance" title={`${routeInfo.origin_label || 'Origem'} → ${routeInfo.destination_label || item.service_city || 'Destino'} · ${routeInfo.duration_min ?? 0} min`}>🚙 {routeInfo.distance_km.toLocaleString('pt-BR')} km · de {routeInfo.origin_label || 'origem anterior'}</small>
+                        : routeInfo?.status === 'route_unavailable'
+                          ? <small className="appointment-card-distance is-unavailable" title="A nuvem tentará calcular novamente automaticamente">☁ rota pendente</small>
+                          : routeInfo?.status === 'location_missing'
+                            ? <small className="appointment-card-distance is-unavailable" title="Localização ainda não resolvida na base cloud">☁ localização pendente</small>
+                            : routeInfo?.status === 'ignored'
+                              ? null
+                              : routeMetricsLoading && (item.service_city || item.client_name)
+                                ? <small className="appointment-card-distance is-loading">Carregando km...</small>
+                                : (item.service_city || item.client_name)
+                                  ? <small className="appointment-card-distance is-loading">☁ km em processamento</small>
+                                  : null}
                       {hasForecast && <small className="appointment-card-revenue">Faturamento: <b>{money.format(Number(item.forecast_amount))}</b></small>}
                     </button>
                     <select
