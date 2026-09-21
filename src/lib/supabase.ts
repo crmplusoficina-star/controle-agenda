@@ -22,6 +22,7 @@ const agendaRelations = new Set([
   'agenda_share_recipients',
   'agenda_share_user_defaults',
   'aria_campaign_targets',
+  'agenda_route_metrics',
 ]);
 
 const primaryFrom = primarySupabase.from.bind(primarySupabase);
@@ -50,5 +51,11 @@ Object.defineProperty(primarySupabase, 'rpc', {
     ? agendaSupabase.rpc(functionName, args, options)
     : primaryRpc(functionName, args, options),
 });
+
+export async function registerAgendaRouteSource() {
+  return agendaSupabase.functions.invoke('agenda-route-worker', {
+    body: { mode: 'register_source', source_url: url, source_key: key },
+  });
+}
 
 export const supabase = primarySupabase;
