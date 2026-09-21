@@ -3,6 +3,7 @@ import { CalendarDays, ChevronLeft, ChevronRight, Map, Plus, Share2, X } from 'l
 import type { Appointment, Branch, ClientSummary, Technician } from '../types';
 import { addDays, isoDate, startOfWeek } from '../lib/date';
 import { supabase } from '../lib/supabase';
+import { calculateAgendaRouteDistances, type AppointmentRouteDistance } from '../lib/agendaRouteDistances';
 import { APPOINTMENT_TYPE_LEGEND, appointmentTypeStyle } from './appointmentTypes';
 import { RetentionMap } from './RetentionMap';
 import { AgendaShareModal } from './AgendaShareModal';
@@ -84,6 +85,8 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
   const [billingBusyId, setBillingBusyId] = useState<string | null>(null);
   const [reasonFilters, setReasonFilters] = useState<string[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
+  const [routeDistances, setRouteDistances] = useState<Record<string, AppointmentRouteDistance>>({});
+  const [routeLoading, setRouteLoading] = useState(false);
 
   useEffect(() => {
     if (range === 'week') setAnchorDate(startOfWeek(weekStart));
@@ -124,7 +127,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
       setPeriodLoading(true);
       const { data, error } = await supabase
         .from('appointments')
-        .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status')
+        .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status,created_at')
         .in('technician_id', technicianIds)
         .gte('appointment_date', periodStartIso)
         .lte('appointment_date', periodEndIso)
@@ -150,6 +153,49 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
     const known = new Set(periodAppointments.map((item) => item.id));
     return [...periodAppointments, ...localCopies.filter((item) => !known.has(item.id))];
   }, [periodAppointments, localCopies]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRouteDistances() {
+      if (!technicians.length || !allAppointments.length) {
+        if (!cancelled) {
+          setRouteDistances({});
+          setRouteLoading(false);
+        }
+        return;
+      }
+
+      setRouteLoading(true);
+      let routeAppointments = [...allAppointments];
+      const contextStartIso = isoDate(startOfWeek(periodStart));
+      if (contextStartIso < periodStartIso) {
+        const technicianIds = technicians.map((item) => item.id);
+        const { data } = await supabase
+          .from('appointments')
+          .select('id,branch,appointment_date,technician_id,client_name,equipment_serial,service_city,status,service_reason,description,reported_hourmeter,forecast_amount,billing_status,created_at')
+          .in('technician_id', technicianIds)
+          .gte('appointment_date', contextStartIso)
+          .lt('appointment_date', periodStartIso)
+          .order('appointment_date');
+
+        const knownIds = new Set(routeAppointments.map((item) => item.id));
+        routeAppointments = [
+          ...((data || []) as Appointment[]).filter((item) => !knownIds.has(item.id)),
+          ...routeAppointments,
+        ];
+      }
+
+      const distances = await calculateAgendaRouteDistances(routeAppointments, technicians);
+      if (!cancelled) {
+        setRouteDistances(distances);
+        setRouteLoading(false);
+      }
+    }
+
+    void loadRouteDistances();
+    return () => { cancelled = true; };
+  }, [allAppointments, technicians, periodStartIso]);
 
   const visibleAppointments = useMemo(() => reasonFilters.length
     ? allAppointments.filter((item) => reasonFilters.includes(item.service_reason || ''))
@@ -304,6 +350,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                 {allCellItems.length === 0 ? <button className="cell-add" onClick={(e) => { e.stopPropagation(); onNew(date, tech.id); }}><Plus size={16}/></button> : items.map((item) => {
                   const typeStyle = appointmentTypeStyle(item.service_reason);
                   const hasForecast = Number(item.forecast_amount || 0) > 0;
+                  const routeInfo = routeDistances[item.id];
                   const billingStatus: BillingStatus = item.billing_status === 'faturado'
                     ? 'faturado'
                     : item.billing_status === 'aguardando_faturamento'
@@ -323,6 +370,13 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
                       <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
                       <span>{item.service_city || 'Cidade não informada'}</span>
                       <small className="appointment-card-reason">{item.service_reason || 'Motivo não informado'}{item.equipment_serial ? ` · ${item.equipment_serial}` : ''}</small>
+                      {routeInfo?.status === 'ok' && routeInfo.distance_km != null
+                        ? <small className="appointment-card-distance" title={`${routeInfo.from_label} → ${routeInfo.to_label} · ${routeInfo.duration_min ?? 0} min`}>🚙 {routeInfo.distance_km.toLocaleString('pt-BR')} km · de {routeInfo.from_label}</small>
+                        : routeInfo?.status === 'unavailable'
+                          ? <small className="appointment-card-distance is-unavailable" title={routeInfo.reason || 'Distância indisponível'}>🚙 km —</small>
+                          : routeLoading && (item.service_city || item.client_name)
+                            ? <small className="appointment-card-distance is-loading">Calculando km...</small>
+                            : null}
                       {hasForecast && <small className="appointment-card-revenue">Faturamento: <b>{money.format(Number(item.forecast_amount))}</b></small>}
                     </button>
                     <select
