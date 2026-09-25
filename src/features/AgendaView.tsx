@@ -155,6 +155,7 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     async function loadRouteMetrics() {
       const ids = allAppointments.map((item) => item.id).filter(Boolean);
@@ -166,7 +167,6 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
         return;
       }
 
-      setRouteMetricsLoading(true);
       const rows: AppointmentRouteMetric[] = [];
       for (let index = 0; index < ids.length; index += 150) {
         const batch = ids.slice(index, index + 150);
@@ -182,13 +182,22 @@ export function AgendaView({ weekStart, onWeek, technicians, appointments, branc
       }
 
       if (!cancelled) {
-        setRouteMetrics(Object.fromEntries(rows.map((item) => [item.appointment_id, item])));
+        const nextMetrics = Object.fromEntries(rows.map((item) => [item.appointment_id, item]));
+        setRouteMetrics(nextMetrics);
         setRouteMetricsLoading(false);
+
+        if (ids.some((id) => !nextMetrics[id])) {
+          retryTimer = setTimeout(() => { void loadRouteMetrics(); }, 10000);
+        }
       }
     }
 
+    setRouteMetricsLoading(true);
     void loadRouteMetrics();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [allAppointments]);
 
   const visibleAppointments = useMemo(() => reasonFilters.length
