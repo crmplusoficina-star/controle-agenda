@@ -213,6 +213,44 @@ function inferState(city: string, branch: string, evidence: G4Location[]) {
   return '';
 }
 
+function parseCityState(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return { city: '', state: '' };
+
+  const match = raw.match(/^(.*?)(?:\s*\/\s*|\s+-\s+)([A-Za-z]{2})$/);
+  if (!match) return { city: raw, state: '' };
+
+  return {
+    city: String(match[1] || '').trim(),
+    state: fold(match[2]),
+  };
+}
+
+function canonicalEvidenceLocation(city: string, branch: string, stateHint: string, evidence: G4Location[]) {
+  const cityKey = fold(city);
+  const branchKey = fold(branch);
+  const stateKey = fold(stateHint);
+  if (!cityKey) return null;
+
+  const candidates = evidence.filter((row) => {
+    const rowCity = fold(row.city);
+    const rowState = fold(row.state);
+    const cityMatches = rowCity === cityKey || rowCity.startsWith(`${cityKey} `);
+    const branchMatches = !branchKey || fold(row.branch) === branchKey;
+    const stateMatches = !stateKey || rowState === stateKey;
+    return cityMatches && branchMatches && stateMatches;
+  });
+
+  const unique = new Map<string, { city: string; state: string }>();
+  for (const row of candidates) {
+    const rowCity = String(row.city || '').trim();
+    const rowState = fold(row.state);
+    if (rowCity && rowState) unique.set(`${fold(rowCity)}|${rowState}`, { city: rowCity, state: rowState });
+  }
+
+  return unique.size === 1 ? [...unique.values()][0] : null;
+}
+
 async function geocodeCity(db: any, city: string, state: string) {
   const locationKey = `${fold(city)}|${fold(state)}`;
   const { data: cached } = await db
@@ -291,12 +329,18 @@ async function resolveDestination(
   }
 
   const machine = item.equipment_serial ? machines.get(fold(item.equipment_serial)) : undefined;
-  const enteredCity = String(item.service_city || '').trim();
-  const city = enteredCity || String(machine?.city || '').trim();
+  const entered = parseCityState(item.service_city);
+  let city = entered.city || String(machine?.city || '').trim();
   if (!city) return null;
 
-  let state = '';
-  if (machine?.state && (!machine.city || fold(machine.city) === fold(city))) state = fold(machine.state);
+  let state = entered.state;
+  const evidenceLocation = canonicalEvidenceLocation(city, item.branch, state, evidence);
+  if (evidenceLocation) {
+    city = evidenceLocation.city;
+    state = state || evidenceLocation.state;
+  }
+
+  if (!state && machine?.state && (!machine.city || fold(machine.city) === fold(city))) state = fold(machine.state);
   if (!state) state = inferState(city, item.branch, evidence);
   if (!state) return null;
 
