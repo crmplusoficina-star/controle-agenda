@@ -23,6 +23,18 @@ const stateNames: Record<string, string> = {
   RR:'Roraima',SC:'Santa Catarina',SP:'São Paulo',SE:'Sergipe',TO:'Tocantins',
 };
 
+const branchStates: Record<string, string> = {
+  BALSAS: 'MA',
+  IMPERATRIZ: 'MA',
+  ITAITINGA: 'CE',
+  'SAO LUIS': 'MA',
+  TERESINA: 'PI',
+  MARITUBA: 'PA',
+  MARABA: 'PA',
+  MIRITITUBA: 'PA',
+  MANAUS: 'AM',
+};
+
 type SourceAppointment = {
   id: string;
   branch: string;
@@ -248,7 +260,15 @@ function canonicalEvidenceLocation(city: string, branch: string, stateHint: stri
     if (rowCity && rowState) unique.set(`${fold(rowCity)}|${rowState}`, { city: rowCity, state: rowState });
   }
 
-  return unique.size === 1 ? [...unique.values()][0] : null;
+  if (unique.size === 1) return [...unique.values()][0];
+
+  if (!stateKey && unique.size > 1) {
+    const branchState = branchStates[branchKey] || '';
+    const regional = [...unique.values()].filter((item) => item.state === branchState);
+    if (regional.length === 1) return regional[0];
+  }
+
+  return null;
 }
 
 async function geocodeCity(db: any, city: string, state: string) {
