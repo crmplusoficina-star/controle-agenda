@@ -332,7 +332,7 @@ export function PresentationView() {
           </MapContainer>
 
           <div className="presentation-status-stack">
-            {techStates.slice(0, 6).map((item) => {
+            {techStates.map((item) => {
               const color = techColor(item.technician.id);
               const metric = item.next ? data.routeMetrics[item.next.id] : undefined;
               return <div className="presentation-status-card" key={item.technician.id}>
