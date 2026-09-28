@@ -94,7 +94,7 @@ function haversineKm(a: [number, number], b: [number, number]) {
   const dLng = rad(b[1] - a[1]);
   const lat1 = rad(a[0]);
   const lat2 = rad(b[0]);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) ** 2 * Math.sin(dLng / 2) ** 2;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * earth * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
