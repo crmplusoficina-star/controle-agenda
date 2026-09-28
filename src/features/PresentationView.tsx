@@ -102,13 +102,16 @@ export function PresentationView() {
   const { branches } = useSession();
   const [now, setNow] = useState(() => new Date());
   const [activeIndex, setActiveIndex] = useState(0);
+  const [eligibleBranches, setEligibleBranches] = useState<string[]>([]);
+  const [displayedBranch, setDisplayedBranch] = useState('');
   const [data, setData] = useState<PresentationData>({ technicians: [], appointments: [], routeMetrics: {}, points: [] });
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState('');
 
   const branchNames = useMemo(() => branches.map((item) => item.name).filter(Boolean), [branches]);
-  const activeBranch = branchNames[activeIndex] || branchNames[0] || '';
+  const rotationBranches = eligibleBranches.length ? eligibleBranches : branchNames;
+  const activeBranch = rotationBranches[activeIndex] || rotationBranches[0] || '';
   const currentWeekStart = useMemo(() => startOfWeek(now), [now]);
   const days = useMemo(() => Array.from({ length: 6 }, (_, index) => addDays(currentWeekStart, index)), [currentWeekStart]);
   const today = isoDate(now);
@@ -119,17 +122,39 @@ export function PresentationView() {
   }, []);
 
   useEffect(() => {
-    if (!branchNames.length) return;
-    const timer = window.setInterval(() => {
-      setActiveIndex((current) => (current + 1) % branchNames.length);
-    }, ROTATION_MS);
-    return () => window.clearInterval(timer);
-  }, [branchNames.length]);
+    let cancelled = false;
+    async function loadEligibleBranches() {
+      if (!branchNames.length) return;
+      const start = isoDate(currentWeekStart);
+      const end = isoDate(addDays(currentWeekStart, 5));
+      const { data: rows, error: rowsError } = await supabase
+        .from('appointments')
+        .select('branch,status')
+        .in('branch', branchNames)
+        .gte('appointment_date', start)
+        .lte('appointment_date', end);
+      if (cancelled || rowsError) return;
+      const scheduled = new Set((rows || []).filter((item: any) => item.status !== 'cancelado').map((item: any) => String(item.branch || '')));
+      const next = branchNames.filter((name) => scheduled.has(name));
+      setEligibleBranches(next);
+      setActiveIndex((current) => next.length ? Math.min(current, next.length - 1) : 0);
+    }
+    void loadEligibleBranches();
+    return () => { cancelled = true; };
+  }, [branchNames, currentWeekStart]);
 
   useEffect(() => {
-    if (activeIndex < branchNames.length) return;
+    if (!rotationBranches.length) return;
+    const timer = window.setInterval(() => {
+      setActiveIndex((current) => (current + 1) % rotationBranches.length);
+    }, ROTATION_MS);
+    return () => window.clearInterval(timer);
+  }, [rotationBranches.length]);
+
+  useEffect(() => {
+    if (activeIndex < rotationBranches.length) return;
     setActiveIndex(0);
-  }, [activeIndex, branchNames.length]);
+  }, [activeIndex, rotationBranches.length]);
 
   const loadBranch = useCallback(async () => {
     if (!activeBranch) return;
@@ -156,8 +181,9 @@ export function PresentationView() {
       return;
     }
 
-    const technicians = (techniciansResponse.data || []) as Technician[];
-    const appointments = (appointmentsResponse.data || []) as Appointment[];
+    const appointments = ((appointmentsResponse.data || []) as Appointment[]).filter((item) => item.status !== 'cancelado');
+    const scheduledTechnicianIds = new Set(appointments.map((item) => item.technician_id));
+    const technicians = ((techniciansResponse.data || []) as Technician[]).filter((technician) => scheduledTechnicianIds.has(technician.id));
     const appointmentIds = appointments.map((item) => item.id);
 
     const routeMetrics: Record<string, AppointmentRouteMetric> = {};
@@ -201,6 +227,7 @@ export function PresentationView() {
     if (!mapResult.error) points = ((mapResult.data || {}) as MapResponse).points || [];
 
     setData({ technicians, appointments, routeMetrics, points });
+    setDisplayedBranch(activeBranch);
     setLastUpdated(new Date());
     setLoading(false);
   }, [activeBranch, currentWeekStart]);
@@ -236,7 +263,9 @@ export function PresentationView() {
   }), [techStates]);
 
   const weekEnd = days[days.length - 1];
-  const branchPosition = branchNames.length ? activeIndex + 1 : 0;
+  const displayedIndex = rotationBranches.indexOf(displayedBranch);
+  const branchPosition = displayedIndex >= 0 ? displayedIndex + 1 : (rotationBranches.length ? activeIndex + 1 : 0);
+  const switchingBranch = Boolean(displayedBranch && activeBranch && displayedBranch !== activeBranch);
 
   function requestFullscreen() {
     if (!document.fullscreenElement) void document.documentElement.requestFullscreen?.();
@@ -246,10 +275,10 @@ export function PresentationView() {
   return <div className="presentation-shell">
     <header className="presentation-header">
       <div className="presentation-brand">
-        <img src="/agenda-brand.png?v=20260901-2" alt="Agenda" />
+        <img src="/agenda-brand.svg?v=20260928-1" alt="Agenda" />
         <div>
           <span>Agenda técnica · modo recepção</span>
-          <h1>{activeBranch || 'Agenda'}</h1>
+          <h1>{displayedBranch || activeBranch || 'Agenda'}</h1>
         </div>
       </div>
       <div className="presentation-header-right">
@@ -259,7 +288,7 @@ export function PresentationView() {
       </div>
     </header>
 
-    <main className="presentation-content">
+    <main className={`presentation-content ${switchingBranch ? 'is-switching' : ''}`}>
       <section className="presentation-agenda-panel">
         <div className="presentation-panel-head">
           <div><span>Agenda da semana</span><strong>{data.technicians.length} técnico{data.technicians.length === 1 ? '' : 's'}</strong></div>
@@ -281,7 +310,7 @@ export function PresentationView() {
             return [
               <div className="presentation-tech" key={`${technician.id}-name`}>
                 <i style={{ background: color }}/>
-                <div><strong>{technician.name}</strong><span>{activeBranch}</span></div>
+                <div><strong>{technician.name}</strong><span>{displayedBranch || activeBranch}</span></div>
               </div>,
               ...days.map((day) => {
                 const dayIso = isoDate(day);
@@ -347,12 +376,13 @@ export function PresentationView() {
           {!mapCoordinates.length && !loading && <div className="presentation-map-empty"><MapPinned size={28}/><strong>Sem localização para exibir</strong><span>A agenda continua atualizada normalmente.</span></div>}
         </div>
       </section>
+          {switchingBranch && <div className="presentation-transition"><div className="presentation-transition-card"><RefreshCw className="presentation-spin" size={22}/><span>Próxima filial</span><strong>{activeBranch}</strong></div></div>}
     </main>
 
     <footer className="presentation-footer">
-      <div><span>Filial {branchPosition} de {branchNames.length || 0}</span><strong>{activeBranch}</strong></div>
+      <div><span>Filial {branchPosition} de {rotationBranches.length || 0}</span><strong>{displayedBranch || activeBranch}</strong></div>
       <div className="presentation-update-time">{error || (lastUpdated ? `Atualizado às ${timeFmt.format(lastUpdated)}` : 'Carregando dados...')}</div>
-      <div className="presentation-progress-track"><div key={activeBranch} className="presentation-progress-bar"/></div>
+      <div className="presentation-progress-track"><div key={displayedBranch || activeBranch} className="presentation-progress-bar"/></div>
     </footer>
   </div>;
 }
