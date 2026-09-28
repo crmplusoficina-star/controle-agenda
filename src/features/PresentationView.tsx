@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { CalendarDays, Expand, MapPinned, Navigation, RadioTower, RefreshCw } from 'lucide-react';
@@ -292,7 +292,7 @@ export function PresentationView() {
                     <span>{item.service_city || 'Cidade não informada'}</span>
                   </div>)}
                   {items.length > 2 && <small className="presentation-more">+{items.length - 2} atendimento{items.length - 2 === 1 ? '' : 's'}</small>}
-                </div>;
+                </Fragment>;
               }),
             ];
           })}
@@ -315,7 +315,7 @@ export function PresentationView() {
               const color = techColor(item.technician.id);
               const currentPosition: [number, number] | null = item.currentPoint ? [item.currentPoint.lat, item.currentPoint.lng] : null;
               const nextPosition: [number, number] | null = item.nextPoint ? [item.nextPoint.lat, item.nextPoint.lng] : null;
-              return <div key={item.technician.id}>
+              return <Fragment key={item.technician.id}>
                 {currentPosition && nextPosition && <Polyline positions={[currentPosition, nextPosition]} pathOptions={{ color, weight: 4, opacity: .72, dashArray: '10 9' }} />}
                 {currentPosition && <Marker position={currentPosition} icon={markerIcon(color, 'H', true)}>
                   <Tooltip direction="top" offset={[0, -24]} opacity={1}>
