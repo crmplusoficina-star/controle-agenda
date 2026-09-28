@@ -102,7 +102,7 @@ export function PresentationView() {
   const { branches } = useSession();
   const [now, setNow] = useState(() => new Date());
   const [activeIndex, setActiveIndex] = useState(0);
-  const [eligibleBranches, setEligibleBranches] = useState<string[]>([]);
+  const [eligibleBranches, setEligibleBranches] = useState<string[] | null>(null);
   const [displayedBranch, setDisplayedBranch] = useState('');
   const [data, setData] = useState<PresentationData>({ technicians: [], appointments: [], routeMetrics: {}, points: [] });
   const [loading, setLoading] = useState(true);
@@ -110,7 +110,7 @@ export function PresentationView() {
   const [error, setError] = useState('');
 
   const branchNames = useMemo(() => branches.map((item) => item.name).filter(Boolean), [branches]);
-  const rotationBranches = eligibleBranches.length ? eligibleBranches : branchNames;
+  const rotationBranches = eligibleBranches ?? [];
   const activeBranch = rotationBranches[activeIndex] || rotationBranches[0] || '';
   const currentWeekStart = useMemo(() => startOfWeek(now), [now]);
   const days = useMemo(() => Array.from({ length: 6 }, (_, index) => addDays(currentWeekStart, index)), [currentWeekStart]);
