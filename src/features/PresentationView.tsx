@@ -292,7 +292,7 @@ export function PresentationView() {
                     <span>{item.service_city || 'Cidade não informada'}</span>
                   </div>)}
                   {items.length > 2 && <small className="presentation-more">+{items.length - 2} atendimento{items.length - 2 === 1 ? '' : 's'}</small>}
-                </Fragment>;
+                </div>;
               }),
             ];
           })}
@@ -327,7 +327,7 @@ export function PresentationView() {
                     <div className="presentation-map-tooltip"><strong>{item.technician.name}</strong><span>Próximo · {item.next?.client_name || 'Atendimento'}</span><small>{item.next?.service_city || ''}</small></div>
                   </Tooltip>
                 </Marker>}
-              </div>;
+              </Fragment>;
             })}
           </MapContainer>
 
