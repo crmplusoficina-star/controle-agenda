@@ -148,7 +148,7 @@ export function PresentationView() {
   const technicianPageCount = Math.max(1, Math.ceil(data.technicians.length / TECHNICIANS_PER_PAGE));
 
   useEffect(() => {
-    if (!rotationBranches.length || !displayedBranch) return;
+    if (!rotationBranches.length || !displayedBranch || activeBranch !== displayedBranch) return;
     const timer = window.setInterval(() => {
       if (technicianPage < technicianPageCount - 1) {
         setTechnicianPage((current) => current + 1);
@@ -158,7 +158,7 @@ export function PresentationView() {
       setActiveIndex((current) => (current + 1) % rotationBranches.length);
     }, ROTATION_MS);
     return () => window.clearInterval(timer);
-  }, [displayedBranch, rotationBranches.length, technicianPage, technicianPageCount]);
+  }, [activeBranch, displayedBranch, rotationBranches.length, technicianPage, technicianPageCount]);
 
   useEffect(() => {
     if (activeIndex < rotationBranches.length) return;
@@ -236,11 +236,11 @@ export function PresentationView() {
     if (!mapResult.error) points = ((mapResult.data || {}) as MapResponse).points || [];
 
     setData({ technicians, appointments, routeMetrics, points });
-    setTechnicianPage(0);
+    if (displayedBranch !== activeBranch) setTechnicianPage(0);
     setDisplayedBranch(activeBranch);
     setLastUpdated(new Date());
     setLoading(false);
-  }, [activeBranch, currentWeekStart]);
+  }, [activeBranch, currentWeekStart, displayedBranch]);
 
   useEffect(() => {
     void loadBranch();
