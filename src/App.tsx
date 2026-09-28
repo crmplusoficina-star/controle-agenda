@@ -13,6 +13,7 @@ import { RetentionView } from './features/RetentionView';
 import { FollowupView } from './features/FollowupView';
 import { DashboardView } from './features/DashboardView';
 import { AdminUsersView } from './features/AdminUsersView';
+import { PresentationView } from './features/PresentationView';
 import { registerAgendaRouteSource, supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
 import { emptyAppointment, emptyFollowup } from './drafts';
@@ -54,7 +55,7 @@ function followupToDraft(item: Followup): FollowupDraft {
   };
 }
 
-export default function App() {
+function OperationalApp() {
   const { user, branches: availableBranches, defaultBranches } = useSession();
   const [view, setView] = useState<ViewName>('agenda');
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -564,4 +565,10 @@ export default function App() {
     <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} error={followupError} onClose={() => { setFollowupDraft(null); setFollowupError(''); }} onSubmit={saveFollowup} />
     <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
   </div>;
+}
+
+
+export default function App() {
+  const presentationMode = new URLSearchParams(window.location.search).get('presentation') === '1';
+  return presentationMode ? <PresentationView /> : <OperationalApp />;
 }

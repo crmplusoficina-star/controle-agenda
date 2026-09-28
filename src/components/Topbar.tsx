@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Bell, LogOut } from 'lucide-react';
+import { Bell, LogOut, MonitorPlay } from 'lucide-react';
 import { CheckboxMultiSelect } from './CheckboxMultiSelect';
 import { useSession } from '../session';
 import type { Branch, Insight, ViewName } from '../types';
@@ -44,6 +44,12 @@ export function Topbar({ view, branches, branch, onBranch, insights, onBell }: {
     <header className="topbar">
       <div className="page-title"><h1>{meta.title}</h1><p>{meta.subtitle}</p></div>
       <div className="topbar-actions">
+        {view === 'agenda' && <button
+          className="subtle-button"
+          type="button"
+          title="Abrir modo apresentação para TV ou recepção"
+          onClick={() => window.open(`${window.location.origin}${window.location.pathname}?presentation=1`, '_blank', 'noopener,noreferrer')}
+        ><MonitorPlay size={16}/> Apresentação</button>}
         {view !== 'usuarios' && <CheckboxMultiSelect
           label="Filial"
           items={branches.map((item) => ({ value: item.name, label: item.name }))}
