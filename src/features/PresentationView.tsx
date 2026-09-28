@@ -19,7 +19,10 @@ type PresentationPoint = {
   kind: 'branch' | 'appointment' | 'client';
   lat: number;
   lng: number;
+  client_key?: string;
   client_name?: string | null;
+  branch?: string | null;
+  city?: string | null;
   service_city?: string | null;
   appointment_date?: string;
   technician_id?: string;
@@ -76,6 +79,14 @@ function FitPresentationMap({ points }: { points: [number, number][] }) {
 
 function appointmentPoint(points: PresentationPoint[], appointmentId: string) {
   return points.find((point) => point.kind === 'appointment' && point.id.replace('appointment:', '') === appointmentId);
+}
+
+function manualCityKey(branch: string, city: string) {
+  return `presentation-city::${fold(branch)}::${fold(city)}`;
+}
+
+function sameClientCity(clientName?: string | null, city?: string | null, rowClientName?: string | null, rowCity?: string | null) {
+  return Boolean(fold(clientName) && fold(city) && fold(clientName) === fold(rowClientName) && fold(city) === fold(rowCity));
 }
 
 function currentAndNext(appointments: Appointment[], technicianId: string, today: string) {
@@ -206,14 +217,24 @@ export function PresentationView() {
 
     const clientNames = Array.from(new Set(appointments.map((item) => item.client_name).filter((item): item is string => Boolean(item))));
     let clientRows: { client_key: string; client_name: string; branch: string; city: string | null; last_service_at: string | null }[] = [];
+    let g4ClientCities: { client_name: string; branch: string; city: string | null }[] = [];
     if (clientNames.length) {
-      const { data: clients } = await supabase
-        .from('g4_client_summary')
-        .select('client_key,client_name,branch,city,last_service_at')
-        .eq('branch', activeBranch)
-        .in('client_name', clientNames)
-        .limit(1000);
-      clientRows = (clients || []) as typeof clientRows;
+      const [clientsResponse, cityResponse] = await Promise.all([
+        supabase
+          .from('g4_client_summary')
+          .select('client_key,client_name,branch,city,last_service_at')
+          .eq('branch', activeBranch)
+          .in('client_name', clientNames)
+          .limit(1000),
+        supabase
+          .from('g4_client_city_summary')
+          .select('client_name,branch,city')
+          .eq('branch', activeBranch)
+          .in('client_name', clientNames)
+          .limit(3000),
+      ]);
+      clientRows = (clientsResponse.data || []) as typeof clientRows;
+      g4ClientCities = (cityResponse.data || []) as typeof g4ClientCities;
     }
 
     const payloadAppointments = appointments.map((item) => ({
@@ -234,6 +255,58 @@ export function PresentationView() {
       body: { clients: clientRows, appointments: payloadAppointments, technician_id: null },
     });
     if (!mapResult.error) points = ((mapResult.data || {}) as MapResponse).points || [];
+
+    // Preserve every location already resolved from G4. Only appointments whose
+    // typed service_city is not present for that client in G4 receive a city-center
+    // fallback, so a manual city never sends the presentation to an unrelated place.
+    const manualCityAppointments = appointments.filter((item) => {
+      const city = String(item.service_city || '').trim();
+      if (!city) return false;
+      return !g4ClientCities.some((row) => sameClientCity(item.client_name, city, row.client_name, row.city));
+    });
+
+    const manualCities = Array.from(new Set(manualCityAppointments.map((item) => String(item.service_city || '').trim()).filter(Boolean)));
+    if (manualCities.length) {
+      const syntheticClients = manualCities.map((city) => ({
+        client_key: manualCityKey(activeBranch, city),
+        client_name: city,
+        branch: activeBranch,
+        city,
+        last_service_at: null,
+      }));
+      const cityLookup = await supabase.functions.invoke('retention-map-context', {
+        body: { clients: syntheticClients, appointments: [], technician_id: null },
+      });
+      const cityPoints = cityLookup.error ? [] : (((cityLookup.data || {}) as MapResponse).points || []);
+      const cityCenterByKey = new Map(
+        cityPoints
+          .filter((point) => point.kind === 'client' && point.client_key)
+          .map((point) => [String(point.client_key), point] as const),
+      );
+
+      for (const appointment of manualCityAppointments) {
+        const city = String(appointment.service_city || '').trim();
+        const center = cityCenterByKey.get(manualCityKey(activeBranch, city));
+        if (!center) continue;
+        const pointIndex = points.findIndex((point) => point.kind === 'appointment' && point.id.replace('appointment:', '') === appointment.id);
+        const replacement: PresentationPoint = {
+          ...(pointIndex >= 0 ? points[pointIndex] : {}),
+          id: `appointment:${appointment.id}`,
+          kind: 'appointment',
+          lat: center.lat,
+          lng: center.lng,
+          branch: appointment.branch,
+          city,
+          service_city: city,
+          client_name: appointment.client_name,
+          appointment_date: appointment.appointment_date,
+          technician_id: appointment.technician_id,
+          technician_name: technicians.find((technician) => technician.id === appointment.technician_id)?.name || null,
+        };
+        if (pointIndex >= 0) points[pointIndex] = replacement;
+        else points.push(replacement);
+      }
+    }
 
     setData({ technicians, appointments, routeMetrics, points });
     if (displayedBranch !== activeBranch) setTechnicianPage(0);
