@@ -13,6 +13,12 @@ const ROTATION_MS = 10000;
 const REFRESH_MS = 30000;
 const TECHNICIANS_PER_PAGE = 3;
 const techColors = ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#9333ea', '#e11d48', '#4f46e5', '#0f766e'];
+const stateNames: Record<string, string> = { PA: 'Pará', MA: 'Maranhão', CE: 'Ceará', PI: 'Piauí', AM: 'Amazonas' };
+const branchState: Record<string, string> = {
+  MARITUBA: 'PA', MARABA: 'PA', MIRITITUBA: 'PA',
+  IMPERATRIZ: 'MA', BALSAS: 'MA', 'SAO LUIS': 'MA',
+  ITAITINGA: 'CE', TERESINA: 'PI', MANAUS: 'AM',
+};
 
 type PresentationPoint = {
   id: string;
@@ -81,12 +87,57 @@ function appointmentPoint(points: PresentationPoint[], appointmentId: string) {
   return points.find((point) => point.kind === 'appointment' && point.id.replace('appointment:', '') === appointmentId);
 }
 
-function manualCityKey(branch: string, city: string) {
-  return `presentation-city::${fold(branch)}::${fold(city)}`;
+function haversineKm(a: [number, number], b: [number, number]) {
+  const rad = (value: number) => value * Math.PI / 180;
+  const earth = 6371;
+  const dLat = rad(b[0] - a[0]);
+  const dLng = rad(b[1] - a[1]);
+  const lat1 = rad(a[0]);
+  const lat2 = rad(b[0]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) ** 2 * Math.sin(dLng / 2) ** 2;
+  return 2 * earth * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-function sameClientCity(clientName?: string | null, city?: string | null, rowClientName?: string | null, rowCity?: string | null) {
-  return Boolean(fold(clientName) && fold(city) && fold(clientName) === fold(rowClientName) && fold(city) === fold(rowCity));
+function dominantState(rows: { city: string | null; state: string | null }[], city: string, fallbackBranch: string) {
+  const matches = rows.filter((row) => fold(row.city) === fold(city) && String(row.state || '').trim());
+  const counts = new Map<string, number>();
+  for (const row of matches) {
+    const state = String(row.state || '').trim().toUpperCase();
+    if (state) counts.set(state, (counts.get(state) || 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return ranked[0]?.[0] || branchState[String(fallbackBranch || '').trim().toUpperCase()] || '';
+}
+
+async function geocodeBrazilCity(city: string, state: string) {
+  try {
+    const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
+    url.searchParams.set('name', city);
+    url.searchParams.set('count', '20');
+    url.searchParams.set('language', 'pt');
+    url.searchParams.set('format', 'json');
+    url.searchParams.set('countryCode', 'BR');
+    const response = await fetch(url.toString());
+    if (!response.ok) return null;
+    const json = await response.json();
+    const desiredCity = fold(city);
+    const desiredState = fold(stateNames[state] || state);
+    const results = Array.isArray(json?.results) ? json.results : [];
+    const exact = results.find((item: any) =>
+      fold(String(item.name || '')) === desiredCity
+      && (!desiredState || fold(String(item.admin1 || '')) === desiredState)
+      && String(item.country_code || '').toUpperCase() === 'BR'
+    );
+    const fallback = results.find((item: any) =>
+      fold(String(item.name || '')) === desiredCity
+      && String(item.country_code || '').toUpperCase() === 'BR'
+    );
+    const chosen = exact || fallback;
+    if (!chosen) return null;
+    return { lat: Number(chosen.latitude), lng: Number(chosen.longitude), state: String(chosen.admin1 || state || '') };
+  } catch {
+    return null;
+  }
 }
 
 function currentAndNext(appointments: Appointment[], technicianId: string, today: string) {
@@ -217,24 +268,14 @@ export function PresentationView() {
 
     const clientNames = Array.from(new Set(appointments.map((item) => item.client_name).filter((item): item is string => Boolean(item))));
     let clientRows: { client_key: string; client_name: string; branch: string; city: string | null; last_service_at: string | null }[] = [];
-    let g4ClientCities: { client_name: string; branch: string; city: string | null }[] = [];
     if (clientNames.length) {
-      const [clientsResponse, cityResponse] = await Promise.all([
-        supabase
-          .from('g4_client_summary')
-          .select('client_key,client_name,branch,city,last_service_at')
-          .eq('branch', activeBranch)
-          .in('client_name', clientNames)
-          .limit(1000),
-        supabase
-          .from('g4_client_city_summary')
-          .select('client_name,branch,city')
-          .eq('branch', activeBranch)
-          .in('client_name', clientNames)
-          .limit(3000),
-      ]);
-      clientRows = (clientsResponse.data || []) as typeof clientRows;
-      g4ClientCities = (cityResponse.data || []) as typeof g4ClientCities;
+      const { data: clients } = await supabase
+        .from('g4_client_summary')
+        .select('client_key,client_name,branch,city,last_service_at')
+        .eq('branch', activeBranch)
+        .in('client_name', clientNames)
+        .limit(1000);
+      clientRows = (clients || []) as typeof clientRows;
     }
 
     const payloadAppointments = appointments.map((item) => ({
@@ -256,56 +297,58 @@ export function PresentationView() {
     });
     if (!mapResult.error) points = ((mapResult.data || {}) as MapResponse).points || [];
 
-    // Preserve every location already resolved from G4. Only appointments whose
-    // typed service_city is not present for that client in G4 receive a city-center
-    // fallback, so a manual city never sends the presentation to an unrelated place.
-    const manualCityAppointments = appointments.filter((item) => {
-      const city = String(item.service_city || '').trim();
-      if (!city) return false;
-      return !g4ClientCities.some((row) => sameClientCity(item.client_name, city, row.client_name, row.city));
-    });
+    // Validation layer used only by the presentation. Existing G4 points stay untouched
+    // when they are geographically consistent with the city typed in the appointment.
+    // Missing or clearly wrong points are replaced by a confirmed Brazilian city center.
+    const serviceCities = Array.from(new Set(appointments.map((item) => String(item.service_city || '').trim()).filter(Boolean)));
+    let locationRows: { city: string | null; state: string | null }[] = [];
+    if (serviceCities.length) {
+      const { data: locations } = await supabase
+        .from('g4_client_location_summary')
+        .select('city,state')
+        .eq('branch', activeBranch)
+        .limit(10000);
+      locationRows = (locations || []) as typeof locationRows;
+    }
 
-    const manualCities = Array.from(new Set(manualCityAppointments.map((item) => String(item.service_city || '').trim()).filter(Boolean)));
-    if (manualCities.length) {
-      const syntheticClients = manualCities.map((city) => ({
-        client_key: manualCityKey(activeBranch, city),
-        client_name: city,
-        branch: activeBranch,
+    const cityCenters = new Map<string, { lat: number; lng: number }>();
+    await Promise.all(serviceCities.map(async (city) => {
+      const state = dominantState(locationRows, city, activeBranch);
+      const center = await geocodeBrazilCity(city, state);
+      if (center && Number.isFinite(center.lat) && Number.isFinite(center.lng)) cityCenters.set(fold(city), center);
+    }));
+
+    for (const appointment of appointments) {
+      const city = String(appointment.service_city || '').trim();
+      if (!city) continue;
+      const center = cityCenters.get(fold(city));
+      if (!center) continue;
+
+      const pointIndex = points.findIndex((point) => point.kind === 'appointment' && point.id.replace('appointment:', '') === appointment.id);
+      const existing = pointIndex >= 0 ? points[pointIndex] : undefined;
+      const existingValid = Boolean(existing
+        && Number.isFinite(existing.lat)
+        && Number.isFinite(existing.lng)
+        && haversineKm([existing.lat, existing.lng], [center.lat, center.lng]) <= 120);
+
+      if (existingValid) continue;
+
+      const replacementPoint: PresentationPoint = {
+        ...(existing || {}),
+        id: `appointment:${appointment.id}`,
+        kind: 'appointment',
+        lat: center.lat,
+        lng: center.lng,
+        branch: appointment.branch,
         city,
-        last_service_at: null,
-      }));
-      const cityLookup = await supabase.functions.invoke('retention-map-context', {
-        body: { clients: syntheticClients, appointments: [], technician_id: null },
-      });
-      const cityPoints = cityLookup.error ? [] : (((cityLookup.data || {}) as MapResponse).points || []);
-      const cityCenterByKey = new Map(
-        cityPoints
-          .filter((point) => point.kind === 'client' && point.client_key)
-          .map((point) => [String(point.client_key), point] as const),
-      );
-
-      for (const appointment of manualCityAppointments) {
-        const city = String(appointment.service_city || '').trim();
-        const center = cityCenterByKey.get(manualCityKey(activeBranch, city));
-        if (!center) continue;
-        const pointIndex = points.findIndex((point) => point.kind === 'appointment' && point.id.replace('appointment:', '') === appointment.id);
-        const replacement: PresentationPoint = {
-          ...(pointIndex >= 0 ? points[pointIndex] : {}),
-          id: `appointment:${appointment.id}`,
-          kind: 'appointment',
-          lat: center.lat,
-          lng: center.lng,
-          branch: appointment.branch,
-          city,
-          service_city: city,
-          client_name: appointment.client_name,
-          appointment_date: appointment.appointment_date,
-          technician_id: appointment.technician_id,
-          technician_name: technicians.find((technician) => technician.id === appointment.technician_id)?.name || null,
-        };
-        if (pointIndex >= 0) points[pointIndex] = replacement;
-        else points.push(replacement);
-      }
+        service_city: city,
+        client_name: appointment.client_name,
+        appointment_date: appointment.appointment_date,
+        technician_id: appointment.technician_id,
+        technician_name: technicians.find((technician) => technician.id === appointment.technician_id)?.name || null,
+      };
+      if (pointIndex >= 0) points[pointIndex] = replacementPoint;
+      else points.push(replacementPoint);
     }
 
     setData({ technicians, appointments, routeMetrics, points });
