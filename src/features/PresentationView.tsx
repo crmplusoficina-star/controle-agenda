@@ -11,6 +11,7 @@ import './presentation.css';
 
 const ROTATION_MS = 10000;
 const REFRESH_MS = 30000;
+const TECHNICIANS_PER_PAGE = 3;
 const techColors = ['#2563eb', '#0891b2', '#16a34a', '#d97706', '#9333ea', '#e11d48', '#4f46e5', '#0f766e'];
 
 type PresentationPoint = {
@@ -104,6 +105,7 @@ export function PresentationView() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [eligibleBranches, setEligibleBranches] = useState<string[] | null>(null);
   const [displayedBranch, setDisplayedBranch] = useState('');
+  const [technicianPage, setTechnicianPage] = useState(0);
   const [data, setData] = useState<PresentationData>({ technicians: [], appointments: [], routeMetrics: {}, points: [] });
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -143,13 +145,20 @@ export function PresentationView() {
     return () => { cancelled = true; };
   }, [branchNames, currentWeekStart]);
 
+  const technicianPageCount = Math.max(1, Math.ceil(data.technicians.length / TECHNICIANS_PER_PAGE));
+
   useEffect(() => {
-    if (!rotationBranches.length) return;
+    if (!rotationBranches.length || !displayedBranch) return;
     const timer = window.setInterval(() => {
+      if (technicianPage < technicianPageCount - 1) {
+        setTechnicianPage((current) => current + 1);
+        return;
+      }
+      setTechnicianPage(0);
       setActiveIndex((current) => (current + 1) % rotationBranches.length);
     }, ROTATION_MS);
     return () => window.clearInterval(timer);
-  }, [rotationBranches.length]);
+  }, [displayedBranch, rotationBranches.length, technicianPage, technicianPageCount]);
 
   useEffect(() => {
     if (activeIndex < rotationBranches.length) return;
@@ -227,6 +236,7 @@ export function PresentationView() {
     if (!mapResult.error) points = ((mapResult.data || {}) as MapResponse).points || [];
 
     setData({ technicians, appointments, routeMetrics, points });
+    setTechnicianPage(0);
     setDisplayedBranch(activeBranch);
     setLastUpdated(new Date());
     setLoading(false);
@@ -248,12 +258,20 @@ export function PresentationView() {
     };
   }, [activeBranch, loadBranch]);
 
-  const techStates = useMemo(() => data.technicians.map((technician) => {
-    const state = currentAndNext(data.appointments, technician.id, today);
+  const visibleTechnicians = useMemo(() => {
+    const start = technicianPage * TECHNICIANS_PER_PAGE;
+    return data.technicians.slice(start, start + TECHNICIANS_PER_PAGE);
+  }, [data.technicians, technicianPage]);
+
+  const visibleTechnicianIds = useMemo(() => new Set(visibleTechnicians.map((technician) => technician.id)), [visibleTechnicians]);
+  const visibleAppointments = useMemo(() => data.appointments.filter((item) => visibleTechnicianIds.has(item.technician_id)), [data.appointments, visibleTechnicianIds]);
+
+  const techStates = useMemo(() => visibleTechnicians.map((technician) => {
+    const state = currentAndNext(visibleAppointments, technician.id, today);
     const currentPoint = state.current ? appointmentPoint(data.points, state.current.id) : undefined;
     const nextPoint = state.next ? appointmentPoint(data.points, state.next.id) : undefined;
     return { technician, ...state, currentPoint, nextPoint };
-  }), [data, today]);
+  }), [data.points, today, visibleAppointments, visibleTechnicians]);
 
   const mapCoordinates = useMemo(() => techStates.flatMap((item) => {
     const coordinates: [number, number][] = [];
@@ -278,7 +296,7 @@ export function PresentationView() {
         <img src="/agenda-brand.svg?v=20260928-1" alt="Agenda" />
         <div>
           <span>Agenda técnica · modo recepção</span>
-          <h1>{displayedBranch || activeBranch || 'Agenda'}</h1>
+          <h1>{displayedBranch || activeBranch || 'Agenda'}{technicianPageCount > 1 ? <small className="presentation-title-page"> · {technicianPage + 1}/{technicianPageCount}</small> : null}</h1>
         </div>
       </div>
       <div className="presentation-header-right">
@@ -291,7 +309,7 @@ export function PresentationView() {
     <main className={`presentation-content ${switchingBranch ? 'is-switching' : ''}`}>
       <section className="presentation-agenda-panel">
         <div className="presentation-panel-head">
-          <div><span>Agenda da semana</span><strong>{data.technicians.length} técnico{data.technicians.length === 1 ? '' : 's'}</strong></div>
+          <div><span>Agenda da semana</span><strong>{technicianPageCount > 1 ? `${visibleTechnicians.length} de ${data.technicians.length} técnicos` : `${data.technicians.length} técnico${data.technicians.length === 1 ? '' : 's'}`}</strong></div>
           {loading && <RefreshCw className="presentation-spin" size={18}/>}
         </div>
 
@@ -305,7 +323,7 @@ export function PresentationView() {
             </div>;
           })}
 
-          {data.technicians.map((technician) => {
+          {visibleTechnicians.map((technician) => {
             const color = techColor(technician.id);
             return [
               <div className="presentation-tech" key={`${technician.id}-name`}>
@@ -314,7 +332,7 @@ export function PresentationView() {
               </div>,
               ...days.map((day) => {
                 const dayIso = isoDate(day);
-                const items = data.appointments.filter((item) => item.technician_id === technician.id && item.appointment_date === dayIso && item.status !== 'cancelado');
+                const items = visibleAppointments.filter((item) => item.technician_id === technician.id && item.appointment_date === dayIso && item.status !== 'cancelado');
                 return <div className={dayIso === today ? 'presentation-day-cell is-today' : 'presentation-day-cell'} key={`${technician.id}-${dayIso}`}>
                   {items.length === 0 ? <span className="presentation-empty">—</span> : items.slice(0, 2).map((item) => <div className="presentation-appointment" style={{ borderLeftColor: color }} key={item.id}>
                     <strong>{item.client_name || item.service_reason || 'Atendimento'}</strong>
@@ -380,9 +398,9 @@ export function PresentationView() {
     </main>
 
     <footer className="presentation-footer">
-      <div><span>Filial {branchPosition} de {rotationBranches.length || 0}</span><strong>{displayedBranch || activeBranch}</strong></div>
+      <div><span>Filial {branchPosition} de {rotationBranches.length || 0}{technicianPageCount > 1 ? ` · tela ${technicianPage + 1}/${technicianPageCount}` : ''}</span><strong>{displayedBranch || activeBranch}</strong></div>
       <div className="presentation-update-time">{error || (lastUpdated ? `Atualizado às ${timeFmt.format(lastUpdated)}` : 'Carregando dados...')}</div>
-      <div className="presentation-progress-track"><div key={displayedBranch || activeBranch} className="presentation-progress-bar"/></div>
+      <div className="presentation-progress-track"><div key={`${displayedBranch || activeBranch}-${technicianPage}`} className="presentation-progress-bar"/></div>
     </footer>
   </div>;
 }
