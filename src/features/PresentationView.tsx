@@ -74,11 +74,29 @@ function FitPresentationMap({ points }: { points: [number, number][] }) {
   const map = useMap();
   useEffect(() => {
     if (!points.length) return;
+
     if (points.length === 1) {
-      map.setView(points[0], 10);
+      map.setView(points[0], 12);
       return;
     }
-    map.fitBounds(L.latLngBounds(points), { padding: [46, 46], maxZoom: 11 });
+
+    let maxDistanceKm = 0;
+    for (let i = 0; i < points.length; i += 1) {
+      for (let j = i + 1; j < points.length; j += 1) {
+        maxDistanceKm = Math.max(maxDistanceKm, haversineKm(points[i], points[j]));
+      }
+    }
+
+    const maxZoom = maxDistanceKm <= 8
+      ? 14
+      : maxDistanceKm <= 25
+        ? 13
+        : maxDistanceKm <= 70
+          ? 12
+          : 11;
+
+    const padding: [number, number] = maxDistanceKm <= 70 ? [30, 30] : [46, 46];
+    map.fitBounds(L.latLngBounds(points), { padding, maxZoom });
   }, [map, points]);
   return null;
 }
