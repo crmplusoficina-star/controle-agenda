@@ -110,7 +110,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               <li><Flag size={16}/>Campanhas e Visita 150h</li>
             </ul>
           </div>
-          <img className="login-hero-aria" src="/aria/aria-insight.webp" alt="ArIA" />
+          <img className="login-hero-aria" src="/aria/aria-login.webp" alt="ArIA" />
         </aside>
         <div className="login-card">
           <div className="login-copy">
