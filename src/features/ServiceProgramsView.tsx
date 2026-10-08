@@ -89,7 +89,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     return rows.filter((row) => {
       if (statusFilter !== 'todos' && programStatus(row) !== statusFilter) return false;
       if (!term) return true;
-      return [row.pin, row.client_name, row.city, row.branch, row.campaign_code, row.model, row.serial_number]
+      return [row.pin, row.client_name || (kind === 'campanha' ? 'PENDENTE DE VALIDAÇÃO' : ''), row.city, row.branch, row.campaign_code, row.model, row.serial_number]
         .some((value) => String(value || '').toUpperCase().includes(term));
     });
   }, [rows, statusFilter, search]);
@@ -203,7 +203,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
                     <strong>{row.campaign_code}</strong>
                     <span>{row.branch}</span>
                     <span className="sp-client"><b>{row.model}-{row.serial_number}</b><small className="sp-mono">{row.pin || ''}</small></span>
-                    <span className="sp-client"><b>{row.client_name || '—'}</b><small>{row.city || ''}{row.last_visit ? `${row.city ? ' · ' : ''}últ. visita ${fmt(row.last_visit)}` : ''}</small>{row.opportunity_lost && <em className="sp-lost">Oportunidade perdida</em>}</span>
+                    <span className="sp-client">{row.client_name ? <b>{row.client_name}</b> : <em className="sp-pending">Pendente de validação</em>}<small>{row.city || ''}{row.last_visit ? `${row.city ? ' · ' : ''}últ. visita ${fmt(row.last_visit)}` : ''}</small>{row.opportunity_lost && <em className="sp-lost">Oportunidade perdida</em>}</span>
                     <span className="sp-client"><b className={row.recommendation === 'Mandatory' ? 'sp-mandatory' : ''}>{row.recommendation}</b><small>prazo {fmt(row.repair_deadline)}</small></span>
                   </>}
               <input type="date" value={row.programmed_date || ''} onChange={(e) => void saveRow(row, { programmed_date: e.target.value || null })} />
