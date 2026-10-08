@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import type { AppointmentRouteMetric, MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
 import '../features/service-programs.css';
+import { effectiveCity } from '../features/ServiceProgramsView';
 
 const reasons = [
   'Garantia',
@@ -87,8 +88,8 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     }
     const timer = window.setTimeout(async () => {
       const [{ data: inspections }, { data: campaigns }] = await Promise.all([
-        supabase.from('inspection_150h').select('pin,client_name,city,delivery_date,programmed_date').is('executed_date', null).limit(2000),
-        supabase.from('campaign_machines').select('id,campaign_code,model,serial_number,pin,client_name,city,programmed_date').is('executed_date', null).limit(2000),
+        supabase.from('inspection_150h').select('pin,branch,client_name,city,service_city,delivery_date,programmed_date').is('executed_date', null).limit(2000),
+        supabase.from('campaign_machines').select('id,campaign_code,branch,model,serial_number,pin,client_name,city,service_city,programmed_date').is('executed_date', null).limit(2000),
       ]);
       if (cancelled) return;
       const found: Opportunity[] = [];
@@ -96,7 +97,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         const pending = row.programmed_date ? 'pendente de execução' : 'pendente de programação';
         if (oppSerial && row.pin === oppSerial) {
           if (oppReason !== 'Visita 150h') found.push({ key: `i-${row.pin}`, scope: 'maquina', text: `Inspeção 150h ${pending} nesta máquina` });
-        } else if (oppCity && normText(row.city) === oppCity) {
+        } else if (oppCity && normText(effectiveCity(row)) === oppCity) {
           found.push({ key: `i-${row.pin}`, scope: 'cidade', text: `Inspeção 150h ${pending}: ${row.client_name || row.pin} (${row.pin})` });
         }
       }
@@ -104,7 +105,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
         const pending = row.programmed_date ? 'pendente de execução' : 'pendente';
         if (oppSerial && campaignMatches(oppSerial, row.pin, row.serial_number, row.model)) {
           if (oppReason !== 'Campanha de campo') found.push({ key: `c-${row.id}`, scope: 'maquina', text: `Campanha ${row.campaign_code} ${pending} nesta máquina` });
-        } else if (oppCity && normText(row.city) === oppCity) {
+        } else if (oppCity && normText(effectiveCity(row)) === oppCity) {
           found.push({ key: `c-${row.id}`, scope: 'cidade', text: `Campanha ${row.campaign_code} ${pending}: ${row.client_name || `${row.model}-${row.serial_number}`}` });
         }
       }

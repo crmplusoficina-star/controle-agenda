@@ -2,3 +2,4 @@
 
 /* Route focus is controlled by Leaflet/React. Do not change stroke width on CSS hover: that caused a visible zoom/jump effect. */
 .retention-map .leaflet-overlay-pane path[stroke-dasharray]{transition:stroke .12s ease,stroke-opacity .12s ease;cursor:pointer}
+.map-legend .program-filter i{width:10px;height:10px;border-radius:50%;background:#fff;display:inline-block}.map-legend .program-filter-campanha i{border:3px solid #ea580c}.map-legend .program-filter-150h i{border:3px solid #0d9488}.map-legend .program-filter b{margin-left:3px}.map-legend .program-filter-campanha.active{background:#fff7ed;border-color:#fdba74;color:#9a3412}.map-legend .program-filter-150h.active{background:#f0fdfa;border-color:#5eead4;color:#115e59}.map-popup-programs{display:grid;gap:3px;margin:4px 0}.map-popup-programs small{font-weight:600}.map-popup-programs .program-campanha{color:#c2410c}.map-popup-programs .program-150h{color:#0f766e}

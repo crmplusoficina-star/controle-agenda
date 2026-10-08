@@ -16,6 +16,7 @@ type ProgramRow = {
   pin: string | null;
   client_name: string | null;
   city: string | null;
+  service_city?: string | null;
   brand?: string | null;
   model: string | null;
   serial_number?: string;
@@ -43,6 +44,13 @@ const statusClass: Record<ProgramStatus, string> = {
   'Concluído': 'sp-status-green',
 };
 
+const normText = (value?: string | null) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+
+export function effectiveCity(row: { branch: string; city: string | null; service_city?: string | null }) {
+  if (row.service_city) return row.service_city;
+  return row.city && normText(row.city) !== normText(row.branch) ? row.city : '';
+}
+
 const fmt = (value?: string | null) => value ? new Intl.DateTimeFormat('pt-BR').format(new Date(`${value.slice(0, 10)}T12:00:00`)) : '—';
 
 export function ServiceProgramsView({ kind, branches, allBranches }: { kind: ProgramKind; branches: string[]; allBranches: Branch[] }) {
@@ -63,8 +71,8 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     setLoading(true);
     setError('');
     const query = kind === '150h'
-      ? supabase.from('inspection_150h').select('pin,branch,client_name,city,brand,model,delivery_date,programmed_date,executed_date,notes').order('delivery_date')
-      : supabase.from('campaign_machines').select('id,campaign_code,branch,model,serial_number,pin,recommendation,repair_deadline,last_visit,opportunity_lost,client_name,city,programmed_date,executed_date,notes').order('campaign_code').order('serial_number');
+      ? supabase.from('inspection_150h').select('pin,branch,client_name,city,service_city,brand,model,delivery_date,programmed_date,executed_date,notes').order('delivery_date')
+      : supabase.from('campaign_machines').select('id,campaign_code,branch,model,serial_number,pin,recommendation,repair_deadline,last_visit,opportunity_lost,client_name,city,service_city,programmed_date,executed_date,notes').order('campaign_code').order('serial_number');
     const { data, error: loadError } = await (branches.length ? query.in('branch', branches) : query);
     if (loadError) {
       setError('Não foi possível carregar a lista.');
@@ -89,7 +97,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     return rows.filter((row) => {
       if (statusFilter !== 'todos' && programStatus(row) !== statusFilter) return false;
       if (!term) return true;
-      return [row.pin, row.client_name || (kind === 'campanha' ? 'PENDENTE DE VALIDAÇÃO' : ''), row.city, row.branch, row.campaign_code, row.model, row.serial_number]
+      return [row.pin, row.client_name || (kind === 'campanha' ? 'PENDENTE DE VALIDAÇÃO' : ''), effectiveCity(row), row.branch, row.campaign_code, row.model, row.serial_number]
         .some((value) => String(value || '').toUpperCase().includes(term));
     });
   }, [rows, statusFilter, search]);
@@ -106,6 +114,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
       p_programmed: next.programmed_date || null,
       p_executed: next.executed_date || null,
       p_notes: next.notes || null,
+      p_city: next.service_city || null,
     });
     setSavingId('');
     if (saveError) {
@@ -145,6 +154,20 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     await load();
   }
 
+  function cityInput(row: ProgramRow) {
+    const current = effectiveCity(row);
+    return (
+      <input
+        key={`city-${row.id}-${current}`}
+        className={current ? '' : 'sp-city-missing'}
+        defaultValue={current}
+        placeholder="Informar cidade"
+        title={!current && row.city ? `G4 informa ${row.city}, igual à filial` : undefined}
+        onBlur={(e) => { const value = e.target.value.trim(); if (value !== current) void saveRow(row, { service_city: value || null }); }}
+      />
+    );
+  }
+
   return (
     <div className="sp-page">
       <div className="sp-toolbar">
@@ -180,8 +203,8 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
       <div className="sp-table">
         <div className={`sp-head sp-grid-${kind}`}>
           {kind === '150h'
-            ? <><span>PIN</span><span>Filial</span><span>Cliente</span><span>Marca</span><span>Data ET</span></>
-            : <><span>Campanha</span><span>Filial</span><span>Máquina</span><span>Cliente</span><span>Tipo / prazo</span></>}
+            ? <><span>PIN</span><span>Filial</span><span>Cliente</span><span>Marca</span><span>Data ET</span><span>Cidade</span></>
+            : <><span>Campanha</span><span>Filial</span><span>Máquina</span><span>Cliente</span><span>Tipo / prazo</span><span>Cidade</span></>}
           <span>Data programação</span><span>Data execução</span><span>Observação</span><span>Status</span>
         </div>
         {loading && <div className="sp-message">Carregando...</div>}
@@ -195,16 +218,18 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
                 ? <>
                     <strong className="sp-mono">{row.pin}</strong>
                     <span>{row.branch}</span>
-                    <span className="sp-client"><b>{row.client_name || '—'}</b><small>{row.city || ''}</small></span>
+                    <span className="sp-client"><b>{row.client_name || '—'}</b></span>
                     <span>{row.brand || '—'}</span>
                     <span>{fmt(row.delivery_date)}</span>
+                    {cityInput(row)}
                   </>
                 : <>
                     <strong>{row.campaign_code}</strong>
                     <span>{row.branch}</span>
                     <span className="sp-client"><b>{row.model}-{row.serial_number}</b><small className="sp-mono">{row.pin || ''}</small></span>
-                    <span className="sp-client">{row.client_name ? <b>{row.client_name}</b> : <em className="sp-pending">Pendente de validação</em>}<small>{row.city || ''}{row.last_visit ? `${row.city ? ' · ' : ''}últ. visita ${fmt(row.last_visit)}` : ''}</small>{row.opportunity_lost && <em className="sp-lost">Oportunidade perdida</em>}</span>
+                    <span className="sp-client">{row.client_name ? <b>{row.client_name}</b> : <em className="sp-pending">Pendente de validação</em>}{row.last_visit && <small>últ. visita {fmt(row.last_visit)}</small>}{row.opportunity_lost && <em className="sp-lost">Oportunidade perdida</em>}</span>
                     <span className="sp-client"><b className={row.recommendation === 'Mandatory' ? 'sp-mandatory' : ''}>{row.recommendation}</b><small>prazo {fmt(row.repair_deadline)}</small></span>
+                    {cityInput(row)}
                   </>}
               <input type="date" value={row.programmed_date || ''} onChange={(e) => void saveRow(row, { programmed_date: e.target.value || null })} />
               <input type="date" value={row.executed_date || ''} onChange={(e) => void saveRow(row, { executed_date: e.target.value || null })} />
