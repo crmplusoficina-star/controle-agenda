@@ -162,14 +162,22 @@ begin
   insert into _t values (12,'service_role com execute', has_function_privilege('service_role','public.register_branch_and_user(text,text,text,text,text,text[])','execute'), '');
 end $$;
 
--- Conferência: todos os casos devem ter ok = true
-select * from _t order by n;
-
--- Conferência dos dados gravados (somente dentro desta transação)
-select * from app_branches where name like 'SAO%TESTE';
-select u.matricula, u.name, u.role, u.active, array_agg(ub.branch order by ub.branch) as filiais
-from app_users u left join app_user_branches ub using (matricula)
-where u.matricula like '9999900%' group by 1,2,3,4 order by 1;
+-- O SQL Editor só exibe o último comando; por isso o resultado sai como erro proposital.
+-- Este bloco SEMPRE aborta a transação: nada é gravado, passe ou falhe.
+do $$
+declare
+  v_total int;
+  v_ok int;
+  v_falhas text;
+begin
+  select count(*), count(*) filter (where ok) into v_total, v_ok from _t;
+  select string_agg(n || ' ' || caso || ' [' || coalesce(detalhe, '') || ']', ' | ' order by n)
+    into v_falhas from _t where ok is not true;
+  if v_falhas is null then
+    raise exception 'TESTE OK: %/% casos passaram. Nada foi gravado (rollback automático).', v_ok, v_total;
+  else
+    raise exception 'TESTE FALHOU: %/% passaram. Falhas: %. Nada foi gravado.', v_ok, v_total, v_falhas;
+  end if;
+end $$;
 
 rollback;
--- Após o ROLLBACK, confirme: select count(*) from app_users where matricula like '9999900%'; -- deve ser 0
