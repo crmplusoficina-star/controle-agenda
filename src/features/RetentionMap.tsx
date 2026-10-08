@@ -127,6 +127,9 @@ function serialKey(value?: string | null) {
   return fold(value).replace(/[^a-z0-9]/g, '');
 }
 
+type ProgramFilter = 'campanha' | '150h';
+type PendingProgram = { kind: ProgramFilter; label: string; serial: string; clientName: string; branch: string };
+
 function canonicalClientKey(value?: string | null) {
   return String(value || '').split('::CITY::')[0];
 }
@@ -295,6 +298,8 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
   }, [appointments, technicians]);
 
   const [technicianIds, setTechnicianIds] = useState<string[]>([]);
+  const [programFilter, setProgramFilter] = useState<ProgramFilter | null>(null);
+  const [pendingPrograms, setPendingPrograms] = useState<PendingProgram[]>([]);
   const [data, setData] = useState<MapResponse>({ points: [], route: null, unresolved: 0, geocoded_now: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -371,6 +376,48 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     }
     return map;
   }, [clients, serialsByClient]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPendingPrograms() {
+      const [{ data: inspections }, { data: campaigns }] = await Promise.all([
+        supabase.from('inspection_150h').select('pin,branch,client_name,delivery_date,programmed_date').is('executed_date', null).limit(5000),
+        supabase.from('campaign_machines').select('campaign_code,branch,model,serial_number,pin,client_name,programmed_date').is('executed_date', null).limit(5000),
+      ]);
+      if (cancelled) return;
+      const rows: PendingProgram[] = [];
+      for (const row of inspections || []) {
+        rows.push({ kind: '150h', serial: row.pin, clientName: row.client_name || '', branch: row.branch, label: `Inspeção 150h ${row.programmed_date ? 'pendente de execução' : 'pendente de programação'} · ${row.pin}` });
+      }
+      for (const row of campaigns || []) {
+        rows.push({ kind: 'campanha', serial: row.pin || '', clientName: row.client_name || '', branch: row.branch, label: `Campanha ${row.campaign_code} ${row.programmed_date ? 'pendente de execução' : 'pendente'} · ${row.model}-${row.serial_number}` });
+      }
+      setPendingPrograms(rows);
+    }
+    void loadPendingPrograms();
+    return () => { cancelled = true; };
+  }, []);
+
+  const clientKeyByNameBranch = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const client of clients) map.set(`${fold(client.client_name)}|${fold(client.branch)}`, canonicalClientKey(client.client_key));
+    return map;
+  }, [clients]);
+
+  const programsByClient = useMemo(() => {
+    const map = new Map<string, PendingProgram[]>();
+    for (const item of pendingPrograms) {
+      const keys = new Set<string>(clientKeysBySerial.get(serialKey(item.serial)) || []);
+      const byName = clientKeyByNameBranch.get(`${fold(item.clientName)}|${fold(item.branch)}`);
+      if (!keys.size && byName) keys.add(byName);
+      for (const key of keys) {
+        const current = map.get(key) || [];
+        current.push(item);
+        map.set(key, current);
+      }
+    }
+    return map;
+  }, [clientKeyByNameBranch, clientKeysBySerial, pendingPrograms]);
 
   const selectedAgenda = useMemo(() => appointments.filter((item) => !routeTechnicianId || item.technician_id === routeTechnicianId).slice().sort((a, b) => a.appointment_date.localeCompare(b.appointment_date) || a.id.localeCompare(b.id)), [appointments, routeTechnicianId]);
   const sequenceByAppointment = useMemo(() => {
@@ -847,6 +894,13 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
 
     <div className={`map-legend interactive ${editMode ? 'edit-mode-legend' : ''}`}>
       {retentionRecency.map((item) => <button type="button" key={item.key} className={recencyFilter === item.key ? 'active' : ''} onClick={() => onRecencyFilter(recencyFilter === item.key ? null : item.key)} title={recencyFilter === item.key ? 'Clique novamente para remover o filtro' : `Filtrar ${item.label}`} disabled={mapInteractionLocked || editMode}><i style={{ background: item.color }}/>{item.label}</button>)}
+      {(['campanha', '150h'] as ProgramFilter[]).map((kind) => {
+        const total = clientPoints.filter((point) => (programsByClient.get(canonicalClientKey(point.client_key)) || []).some((item) => item.kind === kind)).length;
+        const active = programFilter === kind;
+        return <button type="button" key={kind} className={`program-filter program-filter-${kind}${active ? ' active' : ''}`} onClick={() => setProgramFilter(active ? null : kind)} disabled={mapInteractionLocked || editMode} title={active ? 'Clique novamente para remover o filtro' : 'Mostrar só clientes com essa pendência'}>
+          <i/>{kind === 'campanha' ? 'Campanhas pendentes' : 'Visita 150h'} <b>{total}</b>
+        </button>;
+      })}
       <span>🏠 base técnica</span><span>🧑‍🔧 agenda numerada</span><span>🚗 deslocamento</span><span>┄ rota por rodovia</span>
       {!editMode && <span>📍 segure cliente por 5s para corrigir</span>}
       <button type="button" className={`map-edit-mode-toggle ${editMode ? 'active' : ''}`} onClick={() => { cancelLongPress(); setEditingClientKey(null); setPendingLocations(new Map()); setEditHistory([]); setError(''); setEditMode(true); }} disabled={editMode || savingLocation}><Pencil size={12}/> Modo edição</button>
@@ -910,6 +964,9 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
           const key = canonicalClientKey(point.client_key);
           const client = key ? clientByKey.get(key) : undefined;
           if (!client || !key) return null;
+          const clientPrograms = (programsByClient.get(key) || []).filter((item) => !programFilter || item.kind === programFilter);
+          if (programFilter && !clientPrograms.length) return null;
+          const programColor = programFilter === 'campanha' ? '#ea580c' : programFilter === '150h' ? '#0d9488' : '';
           const serials = serialsByClient[retentionKey(client.client_name, client.branch)] || [];
           const isEditing = editingClientKey === point.client_key || canonicalClientKey(editingClientKey) === key;
           const otherLocked = Boolean(editingClientKey && !isEditing);
@@ -922,7 +979,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
               dragend: (event) => { const position = event.target.getLatLng(); void saveOfficialLocation(client, position.lat, position.lng); },
             }}><Tooltip permanent direction="top" offset={[0, -18]} className="official-location-tooltip">{savingLocation ? 'Salvando localização oficial...' : 'Solte e arraste este pino'}</Tooltip></Marker>;
           }
-          return <CircleMarker key={point.id} center={center} radius={editMode ? (isPending ? 8 : 7) : isHolding ? 9 : 6} interactive={!otherLocked} pathOptions={{ color: editMode ? (isPending ? '#1d4ed8' : '#93c5fd') : isHolding ? '#1d4ed8' : '#fff', weight: editMode ? (isPending ? 4 : 2.5) : isHolding ? 4 : 1.5, fillColor: recencyColor(point.last_service_at), fillOpacity: otherLocked ? 0.16 : editMode ? 1 : 0.9, opacity: otherLocked ? 0.16 : 1 }} eventHandlers={{
+          return <CircleMarker key={point.id} center={center} radius={editMode ? (isPending ? 8 : 7) : isHolding ? 9 : 6} interactive={!otherLocked} pathOptions={{ color: editMode ? (isPending ? '#1d4ed8' : '#93c5fd') : isHolding ? '#1d4ed8' : programColor || '#fff', weight: editMode ? (isPending ? 4 : 2.5) : isHolding ? 4 : programColor ? 3.5 : 1.5, fillColor: recencyColor(point.last_service_at), fillOpacity: otherLocked ? 0.16 : editMode ? 1 : 0.9, opacity: otherLocked ? 0.16 : 1 }} eventHandlers={{
             mousedown: (event) => {
               L.DomEvent.stopPropagation(event.originalEvent);
               if (editMode) beginQuickClientDrag(event, client);
@@ -941,6 +998,7 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
               {point.location_source === 'manual_map_drag' && <small className="official-location-note">📍 Localização oficial ajustada no mapa</small>}
               {point.precision === 'city' && <small>Posição aproximada pela cidade</small>}
               {point.precision !== 'city' && point.location_label && point.location_source !== 'manual_map_drag' && <small>Endereço localizado: {point.location_label}</small>}
+              {clientPrograms.length > 0 && <div className="map-popup-programs">{clientPrograms.slice(0, 4).map((item) => <small key={item.label} className={`program-${item.kind}`}>{item.label}</small>)}{clientPrograms.length > 4 && <small>+{clientPrograms.length - 4} pendências</small>}</div>}
               {serials.length > 0 && <small className="map-popup-serial">{serials.slice(0, 2).join(' · ')}{serials.length > 2 ? ` +${serials.length - 2}` : ''}</small>}
               <small className="client-location-edit-help">Segure este pino por 5 segundos para corrigir a localização oficial.</small>
               <div className="map-popup-actions"><button type="button" onClick={() => onOpen(client)}>Ver ficha</button><button type="button" onClick={() => onFollowup(client)}>Follow-up</button><button type="button" className="map-primary-action" onClick={() => onSchedule(client, serials.length === 1 ? serials[0] : '', routeTechnicianId)}><CalendarPlus size={13}/> Agendar</button></div>

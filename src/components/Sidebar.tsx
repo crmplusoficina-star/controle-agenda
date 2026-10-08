@@ -66,6 +66,36 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
           </div>
 
           <div style={{ display: 'grid', gap: 10 }}>
+            <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Visita 150h</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Nova tela com as máquinas entregues (Entrega Técnica) a partir de agosto/2026 que precisam da inspeção de 150 horas. Ao agendar o motivo <b>Visita 150h</b> para o PIN, a data de programação é preenchida; ao concluir o atendimento, entra a data de execução. A linha muda de cor conforme o status: <b>Pendente de programação</b>, <b>Pendente execução</b> ou <b>Concluído</b>.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Campanhas de campo</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Nova tela com as campanhas Volvo por máquina, com tipo, prazo, última visita e oportunidade perdida. Use o motivo <b>Campanha de campo</b> na agenda para programar e concluir. Máquinas não encontradas no G4 aparecem como <b>Pendente de validação</b>.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Oportunidades no atendimento</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Ao digitar a série ou a cidade em um novo atendimento, a ArIA mostra as campanhas e inspeções 150h pendentes da própria máquina e de outras máquinas na mesma cidade, para aproveitar a viagem.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Cidade de atendimento</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Nas telas Visita 150h e Campanhas, informe a cidade onde a máquina está. Quando o G4 traz a cidade da própria filial, o campo fica amarelo pedindo a cidade correta.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Filtros no mapa</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>No mapa da Agenda, use <b>Campanhas pendentes</b> ou <b>Visita 150h</b> para ver só os clientes com essas pendências.</p>
+            </div>
+
             <div style={{ padding: '13px 14px', border: '1px solid #e2e8f0', borderRadius: 12, background: '#f8fafc' }}>
               <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Contato do cliente</strong>
               <span style={{ display: 'block', marginBottom: 7, color: '#2563eb', fontSize: 10, fontWeight: 700 }}>Sugerido por Alex Barbosa</span>
