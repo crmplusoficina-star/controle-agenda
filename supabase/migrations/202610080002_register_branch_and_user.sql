@@ -58,7 +58,7 @@ begin
     end if;
 
     insert into app_users(matricula, name, role, active)
-    values (v_mat, trim(p_user_name), coalesce(v_role_in, 'consultor'), true)
+    values (v_mat, coalesce(nullif(trim(p_user_name), ''), (select name from app_users where matricula = v_mat)), coalesce(v_role_in, 'consultor'), true)
     on conflict (matricula) do update
       set name = coalesce(nullif(trim(p_user_name), ''), app_users.name),
           role = coalesce(v_role_in, app_users.role),
