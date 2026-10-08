@@ -45,7 +45,7 @@ function campaignMatches(equipment: string, pin: string | null, serial: string, 
   if (!eq) return false;
   if (pin && eq === pin.trim().toUpperCase()) return true;
   const sn = serial.trim().toUpperCase();
-  const md = model.trim().toUpperCase().replace(/-/g, '');
+  const md = (model.trim().toUpperCase().replace(/-/g, '').match(/^[A-Z]+[0-9]+/) || [''])[0];
   return sn.length >= 4 && md.length >= 2 && eq.endsWith(sn) && eq.includes(md);
 }
 
