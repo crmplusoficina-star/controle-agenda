@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { LogIn } from 'lucide-react';
 import { supabase } from './lib/supabase';
-import { canonicalUser } from './lib/appUsers';
 import type { Branch } from './types';
 import './components/session.css';
 
@@ -49,18 +48,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const allBranches = (allBranchRows || []).map((row) => ({ name: String(row.name) }));
     if (!allBranches.length) return false;
 
-    const canonical = canonicalUser(clean);
-    const storedDefaults = (branchRows || []).map((row) => String(row.branch));
-    const defaults = canonical?.branches === 'all'
-      ? []
-      : canonical?.branches?.length
-        ? canonical.branches
-        : storedDefaults;
+    const role = userRow.role as AppRole;
+    const defaults = role === 'consultor' ? (branchRows || []).map((row) => String(row.branch)) : [];
 
     setUser({
       matricula: String(userRow.matricula),
-      name: canonical?.name || String(userRow.name),
-      role: canonical?.role || userRow.role as AppRole,
+      name: String(userRow.name),
+      role,
     });
     setBranches(allBranches);
     setDefaultBranches(defaults);

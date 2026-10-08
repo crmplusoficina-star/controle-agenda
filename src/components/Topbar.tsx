@@ -11,6 +11,8 @@ const titles: Record<ViewName, { title: string; subtitle: string }> = {
   retencao: { title: 'Retenção', subtitle: 'Clientes que merecem atenção, sem transformar tudo em oportunidade.' },
   followup: { title: 'Follow-up', subtitle: 'Retornos e oportunidades em uma fila simples.' },
   dashboard: { title: 'Dashboard', subtitle: 'Desempenho comercial, retenção, oportunidades e leitura gerencial.' },
+  inspecao150: { title: 'Visita 150h', subtitle: 'Máquinas entregues a partir de agosto/2026 que precisam da inspeção de 150 horas.' },
+  campanhas: { title: 'Campanhas', subtitle: 'Campanhas de campo pendentes por máquina.' },
   usuarios: { title: 'Usuários e acessos', subtitle: 'Perfis, matrículas e filiais padrão de acesso.' },
 };
 

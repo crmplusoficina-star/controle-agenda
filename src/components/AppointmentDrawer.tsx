@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Check, Loader2, MessageCircle, Route, Trash2 } from 'lucide-react';
+import { Check, Loader2, MessageCircle, Route, Sparkles, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
 import { supabase } from '../lib/supabase';
 import type { AppointmentRouteMetric, MachineSummary, Technician } from '../types';
 import type { AppointmentDraft } from '../drafts';
+import '../features/service-programs.css';
 
 const reasons = [
   'Garantia',
@@ -25,12 +26,27 @@ const reasons = [
   'Folga',
   'Sem agenda',
   'Treinamento',
+  'Visita 150h',
+  'Campanha de campo',
 ];
 
 function clientContactKey(branch: string, clientName: string) {
   const cleanBranch = branch.trim().toUpperCase();
   const cleanClient = clientName.trim().toUpperCase();
   return cleanBranch && cleanClient ? `${cleanClient}|${cleanBranch}` : '';
+}
+
+const normText = (value?: string | null) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+
+type Opportunity = { key: string; scope: 'maquina' | 'cidade'; text: string };
+
+function campaignMatches(equipment: string, pin: string | null, serial: string, model: string) {
+  const eq = equipment.trim().toUpperCase();
+  if (!eq) return false;
+  if (pin && eq === pin.trim().toUpperCase()) return true;
+  const sn = serial.trim().toUpperCase();
+  const md = (model.trim().toUpperCase().replace(/-/g, '').match(/^[A-Z]+[0-9]+/) || [''])[0];
+  return sn.length >= 4 && md.length >= 2 && eq.endsWith(sn) && eq.includes(md);
 }
 
 function whatsappNumber(value: string) {
@@ -57,7 +73,46 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   const [clientContact, setClientContact] = useState('');
   const [routePreview, setRoutePreview] = useState<AppointmentRouteMetric | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
+  const oppSerial = draft ? draft.equipment_serial.trim().toUpperCase() : '';
+  const oppCity = draft ? normText(draft.service_city) : '';
+  const oppReason = draft?.service_reason || '';
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!draft || (oppSerial.length < 5 && !oppCity)) {
+      setOpportunities([]);
+      return () => { cancelled = true; };
+    }
+    const timer = window.setTimeout(async () => {
+      const [{ data: inspections }, { data: campaigns }] = await Promise.all([
+        supabase.from('inspection_150h').select('pin,client_name,city,delivery_date,programmed_date').is('executed_date', null).limit(2000),
+        supabase.from('campaign_machines').select('id,campaign_code,model,serial_number,pin,client_name,city,programmed_date').is('executed_date', null).limit(2000),
+      ]);
+      if (cancelled) return;
+      const found: Opportunity[] = [];
+      for (const row of inspections || []) {
+        const pending = row.programmed_date ? 'pendente de execução' : 'pendente de programação';
+        if (oppSerial && row.pin === oppSerial) {
+          if (oppReason !== 'Visita 150h') found.push({ key: `i-${row.pin}`, scope: 'maquina', text: `Inspeção 150h ${pending} nesta máquina` });
+        } else if (oppCity && normText(row.city) === oppCity) {
+          found.push({ key: `i-${row.pin}`, scope: 'cidade', text: `Inspeção 150h ${pending}: ${row.client_name || row.pin} (${row.pin})` });
+        }
+      }
+      for (const row of campaigns || []) {
+        const pending = row.programmed_date ? 'pendente de execução' : 'pendente';
+        if (oppSerial && campaignMatches(oppSerial, row.pin, row.serial_number, row.model)) {
+          if (oppReason !== 'Campanha de campo') found.push({ key: `c-${row.id}`, scope: 'maquina', text: `Campanha ${row.campaign_code} ${pending} nesta máquina` });
+        } else if (oppCity && normText(row.city) === oppCity) {
+          found.push({ key: `c-${row.id}`, scope: 'cidade', text: `Campanha ${row.campaign_code} ${pending}: ${row.client_name || `${row.model}-${row.serial_number}`}` });
+        }
+      }
+      found.sort((a, b) => (a.scope === b.scope ? 0 : a.scope === 'maquina' ? -1 : 1));
+      setOpportunities(found);
+    }, 400);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [Boolean(draft), oppSerial, oppCity, oppReason]); // eslint-disable-line react-hooks/exhaustive-deps
   const waNumber = whatsappNumber(clientContact);
 
   useEffect(() => {
@@ -119,6 +174,11 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       <div className="form-grid two"><label>Data<input type="date" value={draft.appointment_date} onChange={(e) => setDraft({ ...draft, appointment_date: e.target.value })} /></label><label>Técnico<select value={draft.technician_id} onChange={(e) => { const t = technicians.find((x) => x.id === e.target.value); const nextBranch = t?.branch || draft.branch; setDraft({ ...draft, technician_id: e.target.value, branch: nextBranch, service_city: draft.service_reason === 'Retorno à filial' ? nextBranch : draft.service_city }); }}><option value="">Selecione o técnico</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.branch}</option>)}</select></label></div>
       <label className="serial-field">Série da máquina<input value={draft.equipment_serial} onChange={(e) => onSerialChange(e.target.value.toUpperCase())} placeholder="Digite parte da série" autoComplete="off" />{suggestions.length > 0 && <div className="suggestions">{suggestions.map((m) => <button type="button" key={m.serial} onClick={() => onSelectMachine(m)}><strong>{m.serial}</strong><span>{m.client_name || 'Cliente não informado'} · {m.city || 'Cidade não informada'}</span></button>)}</div>}</label>
       {machineContext && <div className="context-strip"><div><span>Último atendimento G4</span><strong>{machineContext.last_service_at ? new Intl.DateTimeFormat('pt-BR').format(new Date(machineContext.last_service_at)) : '—'}</strong></div><div><span>Histórico</span><strong>{machineContext.service_count} OS</strong></div><div><span>Última operação</span><strong>{machineContext.last_operation_type || '—'}</strong></div></div>}
+      {opportunities.length > 0 && <div className="opportunity-box">
+        <div className="opportunity-head"><Sparkles size={15}/><strong>Oportunidades para esta visita</strong></div>
+        <ul>{opportunities.slice(0, 8).map((item) => <li key={item.key} className={item.scope === 'maquina' ? 'is-machine' : ''}>{item.scope === 'cidade' ? 'Mesma cidade · ' : ''}{item.text}</li>)}</ul>
+        {opportunities.length > 8 && <small>+{opportunities.length - 8} pendências na cidade. Veja em Visita 150h e Campanhas.</small>}
+      </div>}
       <div className="form-grid two"><label>Cliente<input value={draft.client_name} onChange={(e) => setDraft({ ...draft, client_name: e.target.value })} /></label><label>Cidade<input value={draft.service_city} onChange={(e) => setDraft({ ...draft, service_city: e.target.value })} /></label></div>
       <label>Distância do último atendimento <span style={{ color: '#94a3b8', fontWeight: 500 }}>(automático)</span>
         <div style={{ display: 'grid', gridTemplateColumns: '34px 1fr', gap: 8, alignItems: 'center' }}>
