@@ -127,4 +127,5 @@ export type Insight = {
   message: string;
   status: string;
   created_at: string;
+  fingerprint?: string | null;
 };

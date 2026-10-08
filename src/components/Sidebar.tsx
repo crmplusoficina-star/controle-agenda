@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { BarChart3, CalendarRange, ClipboardCheck, Flag, History, House, ListTodo, Megaphone, UsersRound, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { BarChart3, CalendarRange, ChevronsLeft, ChevronsRight, ClipboardCheck, Flag, History, House, ListTodo, Megaphone, UsersRound, X } from 'lucide-react';
 import type { ViewName } from '../types';
 import { useSession } from '../session';
 
@@ -17,6 +18,13 @@ const items: { id: ViewName; label: string; icon: typeof CalendarRange; managerO
 export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewName) => void }) {
   const { user } = useSession();
   const [showUpdates, setShowUpdates] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('agenda-sidebar-collapsed') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    try { localStorage.setItem('agenda-sidebar-collapsed', collapsed ? '1' : '0'); } catch { /* sem armazenamento */ }
+  }, [collapsed]);
   const visibleItems = items.filter((item) => {
     if (item.adminOnly) return user.role === 'admin';
     if (item.managerOnly) return user.role === 'gestor' || user.role === 'admin';
@@ -25,6 +33,7 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
   return (
     <>
       <aside className="sidebar">
+        <div className="brand-mini" aria-hidden="true"><CalendarRange size={20}/></div>
         <div className="brand brand-image-wrap">
           <img
             className="brand-image"
@@ -40,24 +49,25 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
               data-tutorial={`nav-${id}`}
               className={view === id ? 'nav-item active' : 'nav-item'}
               onClick={() => onView(id)}
+              title={collapsed ? label : undefined}
             >
               <Icon size={18} />
               <span>{label}</span>
             </button>
           ))}
-          <button className="nav-item" type="button" onClick={() => setShowUpdates(true)}>
+          <button className="nav-item" type="button" onClick={() => setShowUpdates(true)} title={collapsed ? 'Atualizações' : undefined}>
             <Megaphone size={18} />
             <span>Atualizações</span>
             <small style={{ marginLeft: 'auto', borderRadius: 999, padding: '2px 6px', background: '#fef3c7', color: '#92400e', fontSize: 8, fontWeight: 800 }}>NOVO</small>
           </button>
         </nav>
-        <div className="sidebar-foot">
-          <span>Base operacional</span>
-          <strong>G4</strong>
-        </div>
+        <button type="button" className="nav-item sidebar-toggle" onClick={() => setCollapsed((v) => !v)} title={collapsed ? 'Expandir menu' : 'Recolher menu'} aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}>
+          {collapsed ? <ChevronsRight size={18}/> : <ChevronsLeft size={18}/>}
+          <span>Recolher menu</span>
+        </button>
       </aside>
 
-      {showUpdates && <div onClick={() => setShowUpdates(false)} style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(15,23,42,.38)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      {showUpdates && createPortal(<div onClick={() => setShowUpdates(false)} style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(15,23,42,.38)', display: 'grid', placeItems: 'center', padding: 20 }}>
         <div onClick={(event) => event.stopPropagation()} style={{ width: 'min(560px, 100%)', maxHeight: '82vh', overflow: 'auto', background: '#fff', borderRadius: 18, border: '1px solid #e2e8f0', boxShadow: '0 24px 70px rgba(15,23,42,.22)', padding: 22 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
             <div style={{ width: 38, height: 38, borderRadius: 11, display: 'grid', placeItems: 'center', background: '#eff6ff', color: '#2563eb' }}><Megaphone size={19}/></div>
@@ -121,7 +131,7 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
             </div>
           </div>
         </div>
-      </div>}
+      </div>, document.body)}
     </>
   );
 }

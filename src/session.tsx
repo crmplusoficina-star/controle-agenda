@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { LogIn } from 'lucide-react';
+import { CalendarCheck, Flag, History, LogIn, UserRound } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import type { Branch } from './types';
 import './components/session.css';
@@ -98,22 +98,39 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   if (!value) {
     return <main className="login-screen">
-      <section className="login-card">
-        <div className="login-brand-image-wrap">
-          <img className="login-brand-image" src="/agenda-brand.png?v=20260901-1" alt="Agenda" />
+      <section className="login-shell">
+        <aside className="login-hero">
+          <img className="login-hero-brand" src="/agenda-brand.png?v=20260901-1" alt="Agenda" />
+          <div className="login-hero-copy">
+            <h2>Agenda Técnica</h2>
+            <p>Programação de técnicos, retenção de clientes e oportunidades de pós-venda em um só lugar.</p>
+            <ul>
+              <li><CalendarCheck size={16}/>Agenda e rotas da equipe</li>
+              <li><History size={16}/>Histórico G4 e retenção</li>
+              <li><Flag size={16}/>Campanhas e Visita 150h</li>
+            </ul>
+          </div>
+          <img className="login-hero-aria" src="/aria/aria-insight.webp" alt="ArIA" />
+        </aside>
+        <div className="login-card">
+          <div className="login-copy">
+            <span className="login-kicker">Bem-vindo</span>
+            <h1>Entrar na Agenda</h1>
+            <p>Use sua matrícula para acessar suas filiais.</p>
+          </div>
+          <form onSubmit={handleLogin}>
+            <label>
+              <span>Matrícula</span>
+              <div className="login-input">
+                <UserRound size={17}/>
+                <input autoFocus inputMode="numeric" value={matricula} onChange={(event) => setMatricula(event.target.value.replace(/\D/g, ''))} placeholder="Digite sua matrícula" />
+              </div>
+            </label>
+            {error && <div className="login-error">{error}</div>}
+            <button type="submit" disabled={busy || !matricula.trim()}><LogIn size={17}/>{busy ? 'Entrando...' : 'Entrar'}</button>
+          </form>
+          <small className="login-foot">Problemas para entrar? Fale com o administrador da sua filial.</small>
         </div>
-        <div className="login-copy">
-          <h1>Agenda Técnica</h1>
-          <p>Retenção de atendimentos</p>
-        </div>
-        <form onSubmit={handleLogin}>
-          <label>
-            <span>Matrícula</span>
-            <input autoFocus inputMode="numeric" value={matricula} onChange={(event) => setMatricula(event.target.value.replace(/\D/g, ''))} placeholder="Digite sua matrícula" />
-          </label>
-          {error && <div className="login-error">{error}</div>}
-          <button type="submit" disabled={busy || !matricula.trim()}><LogIn size={17}/>{busy ? 'Entrando...' : 'Entrar'}</button>
-        </form>
       </section>
     </main>;
   }
