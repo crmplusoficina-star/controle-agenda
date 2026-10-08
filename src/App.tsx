@@ -131,7 +131,7 @@ function OperationalApp() {
       return;
     }
     const branchFilter = effectiveBranchValues(branch, branches);
-    let q = supabase.from('ai_insights').select('id,appointment_id,branch,insight_type,priority,presentation_level,title,message,status,created_at').in('status', ['new', 'viewed']).order('created_at', { ascending: false }).limit(30);
+    let q = supabase.from('ai_insights').select('id,appointment_id,branch,insight_type,priority,presentation_level,title,message,status,created_at,fingerprint').in('status', ['new', 'viewed']).order('created_at', { ascending: false }).limit(30);
     q = q.in('branch', branchFilter);
     const { data } = await q;
     setInsights((data || []) as Insight[]);
@@ -537,6 +537,13 @@ function OperationalApp() {
     if (view === 'followup' || view === 'inicio' || view === 'dashboard') await loadFollowups();
   }
 
+  async function hideAllInsights() {
+    const ids = insights.map((item) => item.id);
+    if (!ids.length) return;
+    await supabase.from('ai_insights').update({ status: 'ignored' }).in('id', ids);
+    await loadInsights();
+  }
+
   async function feedbackInsight(id: string, status: 'viewed' | 'ignored' | 'useful') {
     await supabase.from('ai_insights').update({ status }).eq('id', id);
     await loadInsights();
@@ -566,7 +573,7 @@ function OperationalApp() {
     <TechnicianDrawer open={showTechnician} name={techName} branch={techBranch} branches={branches} technicians={allTechnicians} existingId={techExistingId} error={techError} onName={setTechName} onBranch={setTechBranch} onExisting={(id) => { setTechExistingId(id); const selected = allTechnicians.find((item) => item.id === id); if (selected && !techBranch) setTechBranch(selected.branch); }} onClose={() => { setShowTechnician(false); setTechError(''); }} onSubmit={addTechnician} />
     <ClientDetailDrawer client={clientDetail} machines={clientMachines} history={clientHistory} loading={clientDetailLoading} onClose={() => setClientDetail(null)} onCreateFollowup={(client) => { setClientDetail(null); void newFollowup(client); }} />
     <FollowupDrawer draft={followupDraft} setDraft={setFollowupDraft} branches={branches} error={followupError} onClose={() => { setFollowupDraft(null); setFollowupError(''); }} onSubmit={saveFollowup} />
-    <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} />
+    <InsightsDrawer open={showInsights} insights={insights} onClose={() => setShowInsights(false)} onFeedback={feedbackInsight} onHideAll={() => { void hideAllInsights(); }} />
   </div>;
 }
 

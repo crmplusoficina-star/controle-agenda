@@ -78,12 +78,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    if (!suppressAll && routeSequence.length >= 2 && staleRouteClients.length >= 3) {
-      const cityCounts = new Map<string, number>();
-      for (const client of staleRouteClients) cityCounts.set(client.city || 'Sem cidade', (cityCounts.get(client.city || 'Sem cidade') || 0) + 1);
-      const topCities = Array.from(cityCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4);
-      candidates.push({ type: 'relacionamento', priority: staleRouteClients.length >= 8 ? 'alta' : 'normal', level: staleRouteClients.length >= 8 ? 3 : 2, title: 'Clientes ao longo da agenda', message: `A agenda do técnico passa por regiões com ${staleRouteClients.length} clientes sem atendimento há pelo menos 8 meses. Pode valer visualizar antes de fechar a rota.`, facts: { route_sequence: routeSequence.slice(0, 12), stale_clients_count: staleRouteClients.length, cities: topCities, sample_clients: staleRouteClients.slice(0, 6).map((client) => ({ client: client.client_name, city: client.city, days_without_service: daysSince(client.last_service_at), machines: client.machine_count })) } });
-    }
 
     if (!suppressAll && isWarranty && machine?.service_count >= 3 && !isDelivery) {
       candidates.push({ type: 'operacional', priority: 'normal', level: 2, title: 'Contexto de garantia', message: 'A máquina possui histórico de atendimentos e estará em uma visita de garantia. Pode valer revisar o histórico antes da intervenção e considerar uma inspeção visual adicional.', facts: { service_count: machine.service_count, last_service_at: machine.last_service_at, last_operation_type: machine.last_operation_type, recent_history: history.slice(0, 5) } });

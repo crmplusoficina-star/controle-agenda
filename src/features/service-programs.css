@@ -5,3 +5,4 @@
 .sp-row-red{background:#fef2f2}.sp-row-amber{background:#fffbeb}.sp-row-green{background:#f0fdf4}.sp-row-red:hover{background:#fee2e2}.sp-row-amber:hover{background:#fef3c7}.sp-row-green:hover{background:#dcfce7}
 .opportunity-box{display:flex;gap:12px;align-items:flex-start}.opportunity-avatar{width:84px;height:84px;object-fit:contain;flex:none;margin:-4px 0 -4px -6px}.opportunity-content{min-width:0;flex:1}@media(max-width:640px){.opportunity-avatar{width:56px;height:56px}}
 .sp-row input.sp-city-missing{border-color:#fcd34d;background:#fffbeb}
+.insight-item.insight-aria{display:flex;gap:10px;border-color:#fed7aa;background:#fff7ed}.insight-aria-avatar{width:64px;height:64px;object-fit:contain;flex:none;margin:-4px 0 -4px -6px}.insight-body{min-width:0;flex:1}.insight-aria .insight-type{color:#c2410c}.insight-hide-all{white-space:nowrap}
