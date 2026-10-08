@@ -40,12 +40,13 @@ const normText = (value?: string | null) => String(value || '').normalize('NFD')
 
 type Opportunity = { key: string; scope: 'maquina' | 'cidade'; text: string };
 
-function campaignMatches(equipment: string, pin: string | null, serial: string) {
+function campaignMatches(equipment: string, pin: string | null, serial: string, model: string) {
   const eq = equipment.trim().toUpperCase();
   if (!eq) return false;
   if (pin && eq === pin.trim().toUpperCase()) return true;
   const sn = serial.trim().toUpperCase();
-  return sn.length >= 4 && eq.endsWith(sn);
+  const md = model.trim().toUpperCase().replace(/-/g, '');
+  return sn.length >= 4 && md.length >= 2 && eq.endsWith(sn) && eq.includes(md);
 }
 
 function whatsappNumber(value: string) {
@@ -101,7 +102,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       }
       for (const row of campaigns || []) {
         const pending = row.programmed_date ? 'pendente de execução' : 'pendente';
-        if (oppSerial && campaignMatches(oppSerial, row.pin, row.serial_number)) {
+        if (oppSerial && campaignMatches(oppSerial, row.pin, row.serial_number, row.model)) {
           if (oppReason !== 'Campanha de campo') found.push({ key: `c-${row.id}`, scope: 'maquina', text: `Campanha ${row.campaign_code} ${pending} nesta máquina` });
         } else if (oppCity && normText(row.city) === oppCity) {
           found.push({ key: `c-${row.id}`, scope: 'cidade', text: `Campanha ${row.campaign_code} ${pending}: ${row.client_name || `${row.model}-${row.serial_number}`}` });
