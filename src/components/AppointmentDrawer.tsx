@@ -175,9 +175,12 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       <label className="serial-field">Série da máquina<input value={draft.equipment_serial} onChange={(e) => onSerialChange(e.target.value.toUpperCase())} placeholder="Digite parte da série" autoComplete="off" />{suggestions.length > 0 && <div className="suggestions">{suggestions.map((m) => <button type="button" key={m.serial} onClick={() => onSelectMachine(m)}><strong>{m.serial}</strong><span>{m.client_name || 'Cliente não informado'} · {m.city || 'Cidade não informada'}</span></button>)}</div>}</label>
       {machineContext && <div className="context-strip"><div><span>Último atendimento G4</span><strong>{machineContext.last_service_at ? new Intl.DateTimeFormat('pt-BR').format(new Date(machineContext.last_service_at)) : '—'}</strong></div><div><span>Histórico</span><strong>{machineContext.service_count} OS</strong></div><div><span>Última operação</span><strong>{machineContext.last_operation_type || '—'}</strong></div></div>}
       {opportunities.length > 0 && <div className="opportunity-box">
-        <div className="opportunity-head"><Sparkles size={15}/><strong>Oportunidades para esta visita</strong></div>
-        <ul>{opportunities.slice(0, 8).map((item) => <li key={item.key} className={item.scope === 'maquina' ? 'is-machine' : ''}>{item.scope === 'cidade' ? 'Mesma cidade · ' : ''}{item.text}</li>)}</ul>
-        {opportunities.length > 8 && <small>+{opportunities.length - 8} pendências na cidade. Veja em Visita 150h e Campanhas.</small>}
+        <img className="opportunity-avatar" src="/aria/aria-insight.webp" alt="ArIA" />
+        <div className="opportunity-content">
+          <div className="opportunity-head"><Sparkles size={15}/><strong>ArIA: oportunidades para esta visita</strong></div>
+          <ul>{opportunities.slice(0, 8).map((item) => <li key={item.key} className={item.scope === 'maquina' ? 'is-machine' : ''}>{item.scope === 'cidade' ? 'Mesma cidade · ' : ''}{item.text}</li>)}</ul>
+          {opportunities.length > 8 && <small>+{opportunities.length - 8} pendências na cidade. Veja em Visita 150h e Campanhas.</small>}
+        </div>
       </div>}
       <div className="form-grid two"><label>Cliente<input value={draft.client_name} onChange={(e) => setDraft({ ...draft, client_name: e.target.value })} /></label><label>Cidade<input value={draft.service_city} onChange={(e) => setDraft({ ...draft, service_city: e.target.value })} /></label></div>
       <label>Distância do último atendimento <span style={{ color: '#94a3b8', fontWeight: 500 }}>(automático)</span>
