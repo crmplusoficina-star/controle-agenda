@@ -190,7 +190,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
         {!loading && !error && visible.map((row) => {
           const status = programStatus(row);
           return (
-            <div className={`sp-row sp-grid-${kind}${savingId === row.id ? ' is-saving' : ''}`} key={row.id}>
+            <div className={`sp-row sp-grid-${kind} sp-row-${statusClass[status].replace('sp-status-', '')}${savingId === row.id ? ' is-saving' : ''}`} key={row.id}>
               {kind === '150h'
                 ? <>
                     <strong className="sp-mono">{row.pin}</strong>
