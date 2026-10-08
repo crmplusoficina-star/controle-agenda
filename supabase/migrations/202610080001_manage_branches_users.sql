@@ -15,8 +15,6 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-DECLARE
-  v_result jsonb;
 BEGIN
   -- Validar entrada
   IF TRIM(p_name) = '' THEN
@@ -80,7 +78,6 @@ DECLARE
   v_branch text;
   v_invalid_branches text[] := ARRAY[]::text[];
   v_created_branches int := 0;
-  v_result jsonb;
 BEGIN
   -- Validar matricula
   IF TRIM(p_matricula) = '' THEN
@@ -286,7 +283,6 @@ AS $$
 DECLARE
   v_orphaned_branches int;
   v_users_without_branches int;
-  v_result jsonb;
 BEGIN
   -- Contar filiais sem usuários
   SELECT COUNT(*) INTO v_orphaned_branches
