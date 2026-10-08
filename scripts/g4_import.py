@@ -5,6 +5,7 @@ Uso (projeto principal ydziukxbglyuknamcokd, token em $SUPABASE_ACCESS_TOKEN):
   python3 -I scripts/g4_import.py prepare base_g4.csv     # só lê o CSV e mostra o relatório
   python3 -I scripts/g4_import.py stage   base_g4.csv     # carrega em g4_ordens_servico_stage (não toca a tabela do app)
   python3 -I scripts/g4_import.py check                   # compara stage x atual
+  python3 -I scripts/g4_import.py keep-missing            # copia para a stage as OS atuais ausentes do CSV
   python3 -I scripts/g4_import.py swap                    # backup + troca + refresh, numa transação
 """
 import csv
@@ -224,6 +225,25 @@ def check():
     print(f"  OS que existem hoje e não estão no arquivo novo: {lost[0]['n']}")
 
 
+def keep_missing():
+    cols = [c for c in DB_COLS if c != 'id'] + ['importado_em']
+    col_list = ', '.join(cols)
+    sel = ', '.join(f'a.{c}' for c in cols)
+    res = api(f"""
+      with missing as (
+        select a.* from public.g4_ordens_servico a
+        where not exists (select 1 from public.{STAGE} s where s.codigo_os_g4 = a.codigo_os_g4)
+      ), ins as (
+        insert into public.{STAGE} (id, {col_list})
+        select (select coalesce(max(id), 0) from public.{STAGE}) + row_number() over (order by a.id), {sel}
+        from missing a
+        returning 1
+      )
+      select count(*) as n from ins;""")
+    print(f"  OS mantidas da base atual: {res[0]['n']}")
+    check()
+
+
 def swap():
     n = api(f'select count(*) as n from public.{STAGE};')[0]['n']
     if n < 1000:
@@ -242,7 +262,7 @@ def swap():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2 or sys.argv[1] not in ('prepare', 'stage', 'check', 'swap'):
+    if len(sys.argv) < 2 or sys.argv[1] not in ('prepare', 'stage', 'check', 'keep-missing', 'swap'):
         sys.exit(__doc__)
     cmd = sys.argv[1]
     if cmd == 'prepare':
@@ -251,5 +271,7 @@ if __name__ == '__main__':
         stage(sys.argv[2])
     elif cmd == 'check':
         check()
+    elif cmd == 'keep-missing':
+        keep_missing()
     else:
         swap()
