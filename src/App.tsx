@@ -556,7 +556,7 @@ function OperationalApp() {
         {view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} appointments={appointments} technicians={technicians} weekStart={weekStart} onFollowup={(client) => { void newFollowup(client); }} onOpen={openClient} onSchedule={scheduleFromRetention} />}
         {view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => { void newFollowup(); }} onEdit={openFollowup} />}
         {view === 'dashboard' && <DashboardView branches={branches} followups={followups} appointments={appointments} clients={clients} />}
-        {view === 'usuarios' && user.role === 'admin' && <AdminUsersView branches={branches} />}
+        {view === 'usuarios' && user.role === 'admin' && <AdminUsersView />}
       </main>
     </div>
     <AppointmentDrawer draft={appointmentDraft} setDraft={setAppointmentDraft} technicians={technicians} suggestions={machineSuggestions} machineContext={machineContext} lastHourmeter={lastHourmeter} formError={formError} saveBusy={saveBusy} onSubmit={saveAppointment} onClose={() => setAppointmentDraft(null)} onDelete={deleteAppointment} onSelectMachine={selectMachine} onSerialChange={changeAppointmentSerial} />

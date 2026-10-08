@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Pencil, Plus, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
-import type { Branch } from '../types';
+import { Building2, Pencil, Plus, ShieldCheck, UserRoundCheck, UserRoundX } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useSession } from '../session';
 import type { AppRole } from '../session';
@@ -15,13 +14,16 @@ const roleLabel: Record<AppRole, string> = {
 };
 
 type UserRow = { matricula: string; name: string; role: AppRole; active: boolean; branches: string[] };
+type BranchRow = { name: string; active: boolean };
 type FormState = { matricula: string; name: string; role: AppRole; branches: string[] };
 
 const emptyForm: FormState = { matricula: '', name: '', role: 'consultor', branches: [] };
 
-export function AdminUsersView({ branches }: { branches: Branch[] }) {
+export function AdminUsersView() {
   const { user } = useSession();
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [allBranches, setAllBranches] = useState<BranchRow[]>([]);
+  const [busyBranch, setBusyBranch] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
@@ -34,17 +36,22 @@ export function AdminUsersView({ branches }: { branches: Branch[] }) {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError('');
-    const [{ data: userRows, error: userError }, { data: linkRows, error: linkError }] = await Promise.all([
+    const [{ data: userRows, error: userError }, { data: linkRows, error: linkError }, { data: branchRows, error: branchError }] = await Promise.all([
       supabase.from('app_users').select('matricula,name,role,active').order('name'),
       supabase.from('app_user_branches').select('matricula,branch').order('branch'),
+      supabase.from('app_branches').select('name,active').order('name'),
     ]);
-    if (userError || linkError) {
+    if (userError || linkError || branchError) {
       setLoadError('Não foi possível carregar os usuários.');
       setLoading(false);
       return;
     }
+    const branchList = (branchRows || []).map((row) => ({ name: String(row.name), active: Boolean(row.active) }));
+    setAllBranches(branchList);
+    const activeNames = new Set(branchList.filter((b) => b.active).map((b) => b.name));
     const byUser = new Map<string, string[]>();
     for (const row of linkRows || []) {
+      if (!activeNames.has(String(row.branch))) continue;
       const list = byUser.get(String(row.matricula)) || [];
       list.push(String(row.branch));
       byUser.set(String(row.matricula), list);
@@ -65,6 +72,20 @@ export function AdminUsersView({ branches }: { branches: Branch[] }) {
   useEffect(() => { void load(); }, [load]);
 
   const activeCount = useMemo(() => users.filter((item) => item.active).length, [users]);
+  const branches = useMemo(() => allBranches.filter((b) => b.active), [allBranches]);
+
+  async function toggleBranchActive(branch: BranchRow) {
+    const next = !branch.active;
+    if (!next && !window.confirm(`Desativar a filial ${branch.name}? Ela some dos filtros e do histórico do app.`)) return;
+    setBusyBranch(branch.name);
+    const { error } = await supabase.rpc('admin_set_branch_active', { p_actor: user.matricula, p_branch: branch.name, p_active: next });
+    setBusyBranch('');
+    if (error) {
+      window.alert(error.message);
+      return;
+    }
+    window.location.reload();
+  }
 
   function openNew() {
     setEditing(null);
@@ -168,6 +189,28 @@ export function AdminUsersView({ branches }: { branches: Branch[] }) {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="admin-branches">
+        <div className="admin-branches-head">
+          <Building2 size={18}/>
+          <div><strong>Filiais</strong><span>{branches.length} de {allBranches.length} habilitadas. Filiais desligadas não aparecem nos filtros nem no histórico G4.</span></div>
+        </div>
+        <div className="admin-branches-list">
+          {allBranches.map((branch) => (
+            <button
+              type="button"
+              key={branch.name}
+              className={`admin-branch-toggle${branch.active ? ' is-on' : ''}`}
+              disabled={busyBranch === branch.name}
+              onClick={() => void toggleBranchActive(branch)}
+              title={branch.active ? 'Clique para desativar' : 'Clique para habilitar'}
+            >
+              <span className="admin-switch" aria-hidden="true"/>
+              {branch.name}
+            </button>
+          ))}
+        </div>
       </div>
 
       <Drawer
