@@ -13,6 +13,7 @@ import { RetentionView } from './features/RetentionView';
 import { FollowupView } from './features/FollowupView';
 import { DashboardView } from './features/DashboardView';
 import { AdminUsersView } from './features/AdminUsersView';
+import { ServiceProgramsView } from './features/ServiceProgramsView';
 import { PresentationView } from './features/PresentationView';
 import { registerAgendaRouteSource, supabase } from './lib/supabase';
 import { addDays, isoDate, startOfWeek } from './lib/date';
@@ -556,6 +557,8 @@ function OperationalApp() {
         {view === 'retencao' && <RetentionView clients={clients} loading={retentionLoading} futureClients={retentionFutureClients} serialsByClient={retentionSerials} appointments={appointments} technicians={technicians} weekStart={weekStart} onFollowup={(client) => { void newFollowup(client); }} onOpen={openClient} onSchedule={scheduleFromRetention} />}
         {view === 'followup' && <FollowupView rows={followups} loading={followupLoading} onNew={() => { void newFollowup(); }} onEdit={openFollowup} />}
         {view === 'dashboard' && <DashboardView branches={branches} followups={followups} appointments={appointments} clients={clients} />}
+        {view === 'inspecao150' && <ServiceProgramsView kind="150h" branches={selectedBranches} allBranches={branches} />}
+        {view === 'campanhas' && <ServiceProgramsView kind="campanha" branches={selectedBranches} allBranches={branches} />}
         {view === 'usuarios' && user.role === 'admin' && <AdminUsersView />}
       </main>
     </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BarChart3, CalendarRange, History, House, ListTodo, Megaphone, UsersRound, X } from 'lucide-react';
+import { BarChart3, CalendarRange, ClipboardCheck, Flag, History, House, ListTodo, Megaphone, UsersRound, X } from 'lucide-react';
 import type { ViewName } from '../types';
 import { useSession } from '../session';
 
@@ -8,6 +8,8 @@ const items: { id: ViewName; label: string; icon: typeof CalendarRange; managerO
   { id: 'agenda', label: 'Agenda', icon: CalendarRange },
   { id: 'retencao', label: 'Retenção', icon: History },
   { id: 'followup', label: 'Follow-up', icon: ListTodo },
+  { id: 'inspecao150', label: 'Visita 150h', icon: ClipboardCheck },
+  { id: 'campanhas', label: 'Campanhas', icon: Flag },
   { id: 'dashboard', label: 'Dashboard', icon: BarChart3, managerOnly: true },
   { id: 'usuarios', label: 'Usuários e acessos', icon: UsersRound, adminOnly: true },
 ];

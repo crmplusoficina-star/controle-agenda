@@ -22,6 +22,8 @@ export const APPOINTMENT_TYPE_STYLES: Record<string, AppointmentTypeStyle> = {
   'Folga': { color: '#c00000', background: '#fff0f0' },
   'Sem agenda': { color: '#00b050', background: '#eefaf2' },
   'Treinamento': { color: '#0070c0', background: '#eef7fd' },
+  'Visita 150h': { color: '#0d9488', background: '#effcfa' },
+  'Campanha de campo': { color: '#ea580c', background: '#fff5ed' },
 };
 
 export const APPOINTMENT_TYPE_LEGEND = Object.entries(APPOINTMENT_TYPE_STYLES).map(([label, style]) => ({ label, ...style }));

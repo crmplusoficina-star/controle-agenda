@@ -256,6 +256,7 @@ def swap():
       select private.refresh_g4_app_cache();
       select private.refresh_g4_client_city_summary();
       select private.refresh_g4_client_location_summary();
+      select private.refresh_inspection_150h();
       commit;""")
     print('  troca concluída. backup em', BACKUP)
     check()
