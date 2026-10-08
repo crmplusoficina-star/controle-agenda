@@ -20,6 +20,9 @@ type ProgramRow = {
   model: string | null;
   serial_number?: string;
   recommendation?: string;
+  repair_deadline?: string | null;
+  last_visit?: string | null;
+  opportunity_lost?: boolean;
   delivery_date?: string | null;
   programmed_date: string | null;
   executed_date: string | null;
@@ -61,7 +64,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     setError('');
     const query = kind === '150h'
       ? supabase.from('inspection_150h').select('pin,branch,client_name,city,brand,model,delivery_date,programmed_date,executed_date,notes').order('delivery_date')
-      : supabase.from('campaign_machines').select('id,campaign_code,branch,model,serial_number,pin,recommendation,client_name,city,programmed_date,executed_date,notes').order('campaign_code').order('serial_number');
+      : supabase.from('campaign_machines').select('id,campaign_code,branch,model,serial_number,pin,recommendation,repair_deadline,last_visit,opportunity_lost,client_name,city,programmed_date,executed_date,notes').order('campaign_code').order('serial_number');
     const { data, error: loadError } = await (branches.length ? query.in('branch', branches) : query);
     if (loadError) {
       setError('Não foi possível carregar a lista.');
@@ -178,7 +181,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
         <div className={`sp-head sp-grid-${kind}`}>
           {kind === '150h'
             ? <><span>PIN</span><span>Filial</span><span>Cliente</span><span>Marca</span><span>Data ET</span></>
-            : <><span>Campanha</span><span>Filial</span><span>Máquina</span><span>Cliente</span><span>Recom.</span></>}
+            : <><span>Campanha</span><span>Filial</span><span>Máquina</span><span>Cliente</span><span>Tipo / prazo</span></>}
           <span>Data programação</span><span>Data execução</span><span>Observação</span><span>Status</span>
         </div>
         {loading && <div className="sp-message">Carregando...</div>}
@@ -200,8 +203,8 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
                     <strong>{row.campaign_code}</strong>
                     <span>{row.branch}</span>
                     <span className="sp-client"><b>{row.model}-{row.serial_number}</b><small className="sp-mono">{row.pin || ''}</small></span>
-                    <span className="sp-client"><b>{row.client_name || '—'}</b><small>{row.city || ''}</small></span>
-                    <span>{row.recommendation}</span>
+                    <span className="sp-client"><b>{row.client_name || '—'}</b><small>{row.city || ''}{row.last_visit ? `${row.city ? ' · ' : ''}últ. visita ${fmt(row.last_visit)}` : ''}</small>{row.opportunity_lost && <em className="sp-lost">Oportunidade perdida</em>}</span>
+                    <span className="sp-client"><b className={row.recommendation === 'Mandatory' ? 'sp-mandatory' : ''}>{row.recommendation}</b><small>prazo {fmt(row.repair_deadline)}</small></span>
                   </>}
               <input type="date" value={row.programmed_date || ''} onChange={(e) => void saveRow(row, { programmed_date: e.target.value || null })} />
               <input type="date" value={row.executed_date || ''} onChange={(e) => void saveRow(row, { executed_date: e.target.value || null })} />
