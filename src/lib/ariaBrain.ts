@@ -4,7 +4,7 @@ import type { Followup, HistoryRow } from '../types';
 
 export type ArIAAction = {
   label: string;
-  view?: 'inicio' | 'agenda' | 'retencao' | 'followup' | 'dashboard';
+  view?: 'inicio' | 'agenda' | 'retencao' | 'followup' | 'dashboard' | 'inspecao150' | 'campanhas' | 'usuarios';
   mode?: 'list' | 'map';
   tab?: 'active' | 'calendar' | 'history';
   tutorial?: boolean;

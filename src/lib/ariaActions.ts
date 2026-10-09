@@ -8,7 +8,14 @@ type Machine = { serial: string; client: string; city: string; branch: string; l
 
 export type ArIAFlow =
   | { kind: 'tech_branch'; step: 'tech' | 'branch' | 'confirm'; tech?: Tech; toBranch?: string }
-  | { kind: 'schedule'; step: 'machine' | 'tech' | 'date' | 'confirm'; reason: string; machine?: Machine; tech?: Tech; date?: string };
+  | { kind: 'schedule'; step: 'machine' | 'tech' | 'date' | 'confirm'; reason: string; machine?: Machine; tech?: Tech; date?: string }
+  | { kind: 'appt'; op: 'reschedule' | 'complete' | 'delete'; step: 'pick' | 'date' | 'confirm'; candidates?: Appt[]; appt?: Appt; newDate?: string; newTech?: Tech }
+  | { kind: 'tech_add'; step: 'name' | 'branch' | 'confirm'; name?: string; branch?: string }
+  | { kind: 'tech_off'; step: 'tech' | 'confirm'; tech?: Tech }
+  | { kind: 'followup'; step: 'client' | 'confirm'; client?: string; branch?: string; notes?: string; date?: string; candidates?: { client: string; branch: string }[] }
+  | { kind: 'machine_city'; step: 'pin' | 'city' | 'confirm'; pin?: string; city?: string };
+
+type Appt = { id: string; appointment_date: string; client_name: string | null; equipment_serial: string | null; service_city: string | null; service_reason: string | null; technician_id: string; branch: string; techName: string };
 
 export type FlowReply = ArIAReply & { flow: ArIAFlow | null };
 
@@ -47,7 +54,7 @@ function techInText(message: string, techs: Tech[]) {
 }
 
 function serialInText(message: string) {
-  const match = message.toUpperCase().match(/\b[A-Z]{2,5}[A-Z0-9]{8,16}\b/);
+  const match = message.toUpperCase().match(/\b(?=[A-Z0-9]*\d{4})[A-Z]{2,5}[A-Z0-9]{8,16}\b/);
   return match ? match[0] : '';
 }
 
@@ -236,10 +243,246 @@ async function branchPendencies(branches: string[], label: string): Promise<Flow
   };
 }
 
+// ---------- Atendimentos existentes: remarcar, concluir, excluir ----------
+
+async function findAppointments(techs: Tech[], tech?: Tech, term?: string, date?: string, past = false): Promise<Appt[]> {
+  let q = supabase.from('appointments').select('id,appointment_date,client_name,equipment_serial,service_city,service_reason,technician_id,branch').order('appointment_date', { ascending: !past }).limit(8);
+  if (date) q = q.eq('appointment_date', date);
+  else if (past) { const from = new Date(); from.setDate(from.getDate() - 14); q = q.gte('appointment_date', iso(from)).lte('appointment_date', iso(new Date())); }
+  else q = q.gte('appointment_date', iso(new Date()));
+  if (tech) q = q.eq('technician_id', tech.id);
+  const clean = (term || '').trim();
+  if (clean) q = q.or(`client_name.ilike.%${clean.replace(/[%,()]/g, ' ')}%,equipment_serial.ilike.%${clean.replace(/[%,()]/g, ' ')}%`);
+  const { data } = await q;
+  const names = new Map(techs.map((t) => [t.id, t.name]));
+  return (data || []).map((row: any) => ({ ...row, techName: names.get(row.technician_id) || 'Técnico' }));
+}
+
+const apptLabel = (a: Appt) => `${brDate(a.appointment_date)} · ${a.techName} · ${a.client_name || a.service_reason || 'Atendimento'}`;
+const OP_LABEL = { reschedule: 'remarcar', complete: 'concluir', delete: 'excluir' } as const;
+
+async function askAppt(flow: Extract<ArIAFlow, { kind: 'appt' }>): Promise<FlowReply> {
+  if (!flow.appt) {
+    const list = flow.candidates || [];
+    if (!list.length) return { text: `Não encontrei atendimento para ${OP_LABEL[flow.op]} com esses dados. Diga o técnico, o cliente ou a data.`, flow: null };
+    if (list.length > 1) return { text: `Qual atendimento você quer ${OP_LABEL[flow.op]}?`, actions: list.map((a) => choice(apptLabel(a), a.id)), flow: { ...flow, step: 'pick' } };
+    return askAppt({ ...flow, appt: list[0] });
+  }
+  if (flow.op === 'reschedule' && !flow.newDate && !flow.newTech) {
+    return { text: `Para qual dia você quer remarcar ${apptLabel(flow.appt)}? Pode digitar (ex.: 15/10, sexta).`, actions: nextWorkdays(6).map((d) => choice(brDate(d), d)), flow: { ...flow, step: 'date' } };
+  }
+  const a = flow.appt;
+  const detail = flow.op === 'reschedule'
+    ? `Remarcar ${apptLabel(a)} para ${flow.newDate ? brDate(flow.newDate) : brDate(a.appointment_date)}${flow.newTech ? ` com ${flow.newTech.name}` : ''}?`
+    : flow.op === 'complete' ? `Marcar como concluído: ${apptLabel(a)}?${a.service_reason === 'Visita 150h' || a.service_reason === 'Campanha de campo' ? ' A data de execução será preenchida na tela de pendências.' : ''}`
+      : `Excluir o atendimento ${apptLabel(a)}? Essa ação não pode ser desfeita.`;
+  return { text: detail, actions: CONFIRM, flow: { ...flow, step: 'confirm' } };
+}
+
+async function runAppt(flow: Extract<ArIAFlow, { kind: 'appt' }>): Promise<FlowReply> {
+  const a = flow.appt!;
+  let error;
+  if (flow.op === 'reschedule') {
+    const patch: Record<string, unknown> = {};
+    if (flow.newDate) patch.appointment_date = flow.newDate;
+    if (flow.newTech) { patch.technician_id = flow.newTech.id; patch.branch = flow.newTech.branch; }
+    ({ error } = await supabase.from('appointments').update(patch).eq('id', a.id));
+  } else if (flow.op === 'complete') {
+    ({ error } = await supabase.from('appointments').update({ status: 'concluido' }).eq('id', a.id));
+  } else {
+    ({ error } = await supabase.from('appointments').delete().eq('id', a.id));
+  }
+  if (error) return { text: `Não consegui ${OP_LABEL[flow.op]}: ${error.message}`, flow: null };
+  window.dispatchEvent(new CustomEvent('aria:data-changed'));
+  const done = flow.op === 'reschedule' ? 'remarcado' : flow.op === 'complete' ? 'concluído' : 'excluído';
+  return { text: `Pronto. Atendimento ${done}.`, actions: [{ label: 'Abrir Agenda', view: 'agenda' }], flow: null };
+}
+
+// ---------- Técnicos: adicionar e desativar ----------
+
+async function askTechAdd(flow: Extract<ArIAFlow, { kind: 'tech_add' }>): Promise<FlowReply> {
+  if (!flow.name) return { text: 'Qual o nome do novo técnico?', flow: { ...flow, step: 'name' } };
+  if (!flow.branch) return { text: `Em qual filial ${flow.name} vai atender?`, actions: (await loadActiveBranches()).map((b) => choice(b)), flow: { ...flow, step: 'branch' } };
+  return { text: `Cadastrar o técnico ${flow.name} na filial ${flow.branch}?`, actions: CONFIRM, flow: { ...flow, step: 'confirm' } };
+}
+
+async function runTechAdd(flow: Extract<ArIAFlow, { kind: 'tech_add' }>): Promise<FlowReply> {
+  const { error } = await supabase.from('technicians').insert({ name: flow.name, branch: flow.branch, active: true });
+  if (error) return { text: error.code === '23505' ? `Já existe um técnico ${flow.name} em ${flow.branch}.` : `Não consegui cadastrar: ${error.message}`, flow: null };
+  window.dispatchEvent(new CustomEvent('aria:data-changed'));
+  return { text: `Pronto. ${flow.name} foi cadastrado em ${flow.branch}.`, actions: [{ label: 'Abrir Agenda', view: 'agenda' }], flow: null };
+}
+
+async function askTechOff(flow: Extract<ArIAFlow, { kind: 'tech_off' }>): Promise<FlowReply> {
+  if (!flow.tech) return { text: 'Qual técnico você quer desativar?', actions: (await loadTechnicians()).slice(0, 20).map((t) => choice(`${t.name} · ${t.branch}`, t.id)), flow: { ...flow, step: 'tech' } };
+  return { text: `Desativar ${flow.tech.name} (${flow.tech.branch})? Ele sai da agenda, mas o histórico de atendimentos é mantido.`, actions: CONFIRM, flow: { ...flow, step: 'confirm' } };
+}
+
+async function runTechOff(flow: Extract<ArIAFlow, { kind: 'tech_off' }>): Promise<FlowReply> {
+  const { error } = await supabase.from('technicians').update({ active: false }).eq('id', flow.tech!.id);
+  if (error) return { text: `Não consegui desativar: ${error.message}`, flow: null };
+  window.dispatchEvent(new CustomEvent('aria:data-changed'));
+  return { text: `Pronto. ${flow.tech!.name} foi desativado.`, flow: null };
+}
+
+// ---------- Follow-up ----------
+
+async function askFollowup(flow: Extract<ArIAFlow, { kind: 'followup' }>, userBranches: string[]): Promise<FlowReply> {
+  if (!flow.branch) {
+    const term = (flow.client || '').trim();
+    if (!term) return { text: 'Para qual cliente você quer abrir o follow-up?', flow: { ...flow, step: 'client' } };
+    let q = supabase.from('g4_client_summary').select('client_name,branch').ilike('client_name', `%${term}%`).order('last_service_at', { ascending: false }).limit(6);
+    if (userBranches.length) q = q.in('branch', userBranches);
+    const { data } = await q;
+    const found = (data || []).map((row: any) => ({ client: row.client_name, branch: row.branch }));
+    if (!found.length) return { text: `Não encontrei "${term}" no histórico G4. Digite o nome como aparece no G4.`, flow: { ...flow, step: 'client', client: '' } };
+    if (found.length > 1) return { text: 'Qual destes clientes?', actions: found.map((c, i) => choice(`${c.client} · ${c.branch}`, `__client|${i}`)), flow: { ...flow, step: 'client', candidates: found } };
+    flow = { ...flow, client: found[0].client, branch: found[0].branch };
+  }
+  const { data: open } = await supabase.from('followups').select('id').eq('branch', flow.branch!).ilike('client_name', flow.client!).neq('stage', 'encerrar').limit(1);
+  if ((open || []).length) return { text: `${flow.client} já tem uma tratativa aberta no Follow-up.`, actions: [{ label: 'Abrir Follow-up', view: 'followup' }], flow: null };
+  return { text: `Abrir follow-up para ${flow.client} (${flow.branch})${flow.date ? ` com retorno em ${brDate(flow.date)}` : ''}${flow.notes ? `\nObservação: ${flow.notes}` : ''}?`, actions: CONFIRM, flow: { ...flow, step: 'confirm' } };
+}
+
+async function runFollowup(flow: Extract<ArIAFlow, { kind: 'followup' }>, user: AppUser): Promise<FlowReply> {
+  const { error } = await supabase.from('followups').insert({
+    branch: flow.branch, client_name: flow.client, stage: 'prospectar',
+    next_followup_date: flow.date || null, notes: flow.notes || 'Aberto pela ArIA',
+    created_by_matricula: user.matricula, created_by_name: user.name, updated_by_matricula: user.matricula, updated_by_name: user.name,
+  });
+  if (error) return { text: `Não consegui abrir o follow-up: ${error.message}`, flow: null };
+  window.dispatchEvent(new CustomEvent('aria:data-changed'));
+  return { text: `Pronto. Follow-up aberto para ${flow.client}.`, actions: [{ label: 'Abrir Follow-up', view: 'followup' }], flow: null };
+}
+
+// ---------- Cidade da máquina (150h / campanha) ----------
+
+async function askMachineCity(flow: Extract<ArIAFlow, { kind: 'machine_city' }>): Promise<FlowReply> {
+  if (!flow.pin) return { text: 'Qual o PIN da máquina?', flow: { ...flow, step: 'pin' } };
+  if (!flow.city) return { text: `Em qual cidade a máquina ${flow.pin} está?`, flow: { ...flow, step: 'city' } };
+  return { text: `Registrar a cidade ${flow.city} para a máquina ${flow.pin} nas telas Visita 150h e Campanhas?`, actions: CONFIRM, flow: { ...flow, step: 'confirm' } };
+}
+
+async function runMachineCity(flow: Extract<ArIAFlow, { kind: 'machine_city' }>, user: AppUser): Promise<FlowReply> {
+  const [{ data: insp }, { data: camp }] = await Promise.all([
+    supabase.from('inspection_150h').select('pin,programmed_date,executed_date,notes').eq('pin', flow.pin!),
+    supabase.from('campaign_machines').select('id,programmed_date,executed_date,notes').eq('pin', flow.pin!),
+  ]);
+  const jobs = [
+    ...(insp || []).map((r: any) => supabase.rpc('update_service_program', { p_actor: user.matricula, p_kind: '150h', p_id: r.pin, p_programmed: r.programmed_date, p_executed: r.executed_date, p_notes: r.notes, p_city: flow.city })),
+    ...(camp || []).map((r: any) => supabase.rpc('update_service_program', { p_actor: user.matricula, p_kind: 'campanha', p_id: r.id, p_programmed: r.programmed_date, p_executed: r.executed_date, p_notes: r.notes, p_city: flow.city })),
+  ];
+  if (!jobs.length) return { text: `A máquina ${flow.pin} não está na Visita 150h nem nas campanhas.`, flow: null };
+  const results = await Promise.all(jobs);
+  const failed = results.find((r) => r.error);
+  if (failed?.error) return { text: `Não consegui registrar: ${failed.error.message}`, flow: null };
+  return { text: `Pronto. ${flow.pin} agora está em ${flow.city} (${jobs.length} registro${jobs.length > 1 ? 's' : ''}).`, flow: null };
+}
+
+// ---------- Intenção interpretada pela IA ----------
+
+export async function runArIAIntent(intent: string, args: Record<string, string>, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
+  const a = (k: string) => String(args?.[k] || '').trim();
+  const techs = await loadTechnicians();
+  const findTech = (name: string) => (name ? techInText(name, techs) || techs.find((t) => fold(t.name) === fold(name)) : undefined);
+  const branches = await loadActiveBranches();
+  const findBranch = (name: string) => (name ? branches.find((b) => fold(b) === fold(name)) || branches.find((b) => fold(name).includes(fold(b))) : undefined);
+  const date = (value: string) => (value ? parseDate(value) || undefined : undefined);
+
+  switch (intent) {
+    case 'trocar_filial_tecnico': {
+      const tech = findTech(a('tecnico'));
+      const toBranch = findBranch(a('filial'));
+      return askTechBranch({ kind: 'tech_branch', step: 'tech', tech, toBranch: toBranch && toBranch !== tech?.branch ? toBranch : undefined });
+    }
+    case 'agendar_atendimento': {
+      const tipo = a('tipo');
+      const reason = /150/.test(tipo) ? 'Visita 150h' : /campanha/i.test(tipo) ? 'Campanha de campo' : tipo || 'Revisão OS cliente';
+      const pin = serialInText(a('pin')) || a('pin').toUpperCase();
+      let machine: Machine | undefined = pin ? (await machineBySerial(pin)) || { serial: pin, client: a('cliente'), city: '', branch: '', label: pin } : undefined;
+      if (!machine && a('cliente')) machine = { serial: '', client: a('cliente'), city: '', branch: '', label: a('cliente') };
+      return askSchedule({ kind: 'schedule', step: 'machine', reason, machine, tech: findTech(a('tecnico')), date: date(a('data')) }, user, userBranches);
+    }
+    case 'remarcar_atendimento':
+    case 'concluir_atendimento':
+    case 'excluir_atendimento': {
+      const op = intent === 'remarcar_atendimento' ? 'reschedule' : intent === 'concluir_atendimento' ? 'complete' : 'delete';
+      const tech = findTech(a('tecnico'));
+      const candidates = await findAppointments(techs, tech, a('cliente_ou_pin'), date(a('data_atual') || a('data')), op === 'complete');
+      return askAppt({ kind: 'appt', op, step: 'pick', candidates, newDate: date(a('nova_data')), newTech: findTech(a('novo_tecnico')) });
+    }
+    case 'adicionar_tecnico':
+      return askTechAdd({ kind: 'tech_add', step: 'name', name: a('nome') || undefined, branch: findBranch(a('filial')) });
+    case 'desativar_tecnico':
+      return askTechOff({ kind: 'tech_off', step: 'tech', tech: findTech(a('tecnico')) });
+    case 'criar_followup':
+      return askFollowup({ kind: 'followup', step: 'client', client: a('cliente'), notes: a('observacao') || undefined, date: date(a('data_retorno')) }, userBranches);
+    case 'informar_cidade_maquina':
+      return askMachineCity({ kind: 'machine_city', step: 'pin', pin: (serialInText(a('pin')) || a('pin').toUpperCase()) || undefined, city: a('cidade') || undefined });
+    case 'oportunidades_rota': {
+      const tech = findTech(a('tecnico'));
+      if (!tech) return { text: 'De qual técnico você quer ver a rota?', actions: techs.slice(0, 12).map((t) => choice(`${t.name} · ${t.branch}`, `__route|${t.id}`)), flow: null };
+      return routeOpportunities(tech);
+    }
+    case 'pendencias_filial': {
+      const named = findBranch(a('filial'));
+      const scope = named ? [named] : userBranches.length ? userBranches : branches;
+      return branchPendencies(scope, named ? `de ${named}` : 'das suas filiais');
+    }
+    case 'navegar': {
+      const tela = fold(a('tela'));
+      const map: [RegExp, ArIAAction][] = [
+        [/150/, { label: 'Abrir Visita 150h', view: 'inspecao150' }],
+        [/campanha/, { label: 'Abrir Campanhas', view: 'campanhas' }],
+        [/mapa/, { label: 'Abrir mapa', view: 'retencao', mode: 'map' }],
+        [/retenc/, { label: 'Abrir Retenção', view: 'retencao' }],
+        [/follow/, { label: 'Abrir Follow-up', view: 'followup' }],
+        [/dashboard|painel/, { label: 'Abrir Dashboard', view: 'dashboard' }],
+        [/usuario|acesso/, { label: 'Abrir Usuários', view: 'usuarios' }],
+        [/agenda/, { label: 'Abrir Agenda', view: 'agenda' }],
+      ];
+      const hit = map.find(([re]) => re.test(tela));
+      return hit ? { text: `Claro. ${hit[1].label}.`, actions: [hit[1]], flow: null } : null;
+    }
+    default:
+      return null;
+  }
+}
+
 // ---------- Entrada ----------
 
 export async function startArIAFlow(message: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
   const text = fold(message);
+
+  const techs0 = await loadTechnicians();
+  const techName = techInText(message, techs0)?.name || '';
+  const pin0 = serialInText(message);
+  const dates = Array.from(message.matchAll(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|amanh[ãa]|hoje|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado/gi)).map((m) => m[0]);
+  if (/\b(remarc|reagend|adiar|adia|antecip)|mud\w* .*data/.test(text)) {
+    return runArIAIntent('remarcar_atendimento', { tecnico: techName, cliente_ou_pin: pin0, data_atual: dates.length > 1 ? dates[0] : '', nova_data: dates.length ? dates[dates.length - 1] : '' }, user, userBranches);
+  }
+  if (/\b(conclu|finaliz)\w*.*(atendimento|visita|servico|os)\b|atendimento.*(conclu|finaliz|executad)/.test(text)) {
+    return runArIAIntent('concluir_atendimento', { tecnico: techName, cliente_ou_pin: pin0, data: dates[0] || '' }, user, userBranches);
+  }
+  if (/\b(exclu|apag|cancel)\w*.*(atendimento|agendamento|visita)/.test(text)) {
+    return runArIAIntent('excluir_atendimento', { tecnico: techName, cliente_ou_pin: pin0, data: dates[0] || '' }, user, userBranches);
+  }
+  if (/\b(adicion|cadastr|inclu|criar|novo)\w*.* tecnic/.test(text)) {
+    const branches = await loadActiveBranches();
+    const name = (message.match(/t[ée]cnico\s+([A-ZÀ-Úa-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)?)/) || [])[1] || '';
+    return runArIAIntent('adicionar_tecnico', { nome: branches.some((b) => fold(b) === fold(name)) ? '' : name, filial: branches.find((b) => text.includes(fold(b))) || '' }, user, userBranches);
+  }
+  if (/\b(desativ|inativ|remov|tirar)\w*.* tecnic/.test(text)) {
+    return runArIAIntent('desativar_tecnico', { tecnico: techName }, user, userBranches);
+  }
+  if (/\b(abr|cri|nov)\w*.*(follow|tratativa)/.test(text)) {
+    const client = (message.match(/(?:para|pro|pra|do|da|cliente)\s+(?:o |a )?cliente?\s*([^,.;]+)$/i) || [])[1] || '';
+    return runArIAIntent('criar_followup', { cliente: client.trim(), data_retorno: dates[0] || '' }, user, userBranches);
+  }
+  if (pin0 && /\b(cidade|esta em|fica em|localizad)/.test(text)) {
+    const city = (message.match(/(?:est[áa]|fica|localizada)\s+em\s+([^,.;]+)/i) || message.match(/cidade\s+(?:de\s+|é\s+)?([^,.;]+)/i) || [])[1] || '';
+    return runArIAIntent('informar_cidade_maquina', { pin: pin0, cidade: city.trim() }, user, userBranches);
+  }
 
   if (/(troc|mud|transfer|mov|alter|passa)\w*.*filial|filial.*(do|da) tecnic/.test(text)) {
     const techs = await loadTechnicians();
@@ -283,8 +526,62 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     const machine = serial ? await machineBySerial(serial) : null;
     return askSchedule({ kind: 'schedule', step: 'machine', reason, machine: machine || undefined, tech: techs.find((t) => t.id === techId) }, user, userBranches);
   }
+  if (input.startsWith('__route|')) {
+    const tech = (await loadTechnicians()).find((t) => t.id === input.split('|')[1]);
+    return tech ? routeOpportunities(tech) : null;
+  }
   if (!flow) return null;
   const text = fold(input);
+  if (input === '__cancel' || /^(cancela|cancelar|nao|desisto|esquece)\b/.test(text)) return { text: 'Tudo bem, cancelei. Nada foi alterado.', flow: null };
+  if (!input.startsWith('__') && input.length > 3 && /\b(agend|remarc|reagend|troc|mud|desativ|adicion|cadastr|abr|cri|conclu|exclu|apag|pendenc|aproveit|quais|qual |quem|mostr|ver |maquina|cidade|esta em)/.test(text) && flow.step !== 'confirm') return null;
+  const yes = input === '__confirm' || /^(sim|confirm|pode|ok|isso)/.test(text);
+
+  if (flow.kind === 'appt') {
+    if (flow.step === 'pick') {
+      const appt = flow.candidates?.find((c) => c.id === input);
+      if (!appt) return { text: 'Escolha um dos atendimentos acima.', flow };
+      return askAppt({ ...flow, appt });
+    }
+    if (flow.step === 'date') {
+      const newDate = parseDate(input);
+      if (!newDate) return { text: 'Não entendi a data. Escolha uma opção ou digite como 15/10 ou "sexta".', flow };
+      return askAppt({ ...flow, newDate });
+    }
+    return yes ? runAppt(flow) : null;
+  }
+  if (flow.kind === 'tech_add') {
+    if (flow.step === 'name') return askTechAdd({ ...flow, name: input.trim() });
+    if (flow.step === 'branch') {
+      const branch = (await loadActiveBranches()).find((b) => fold(b) === text || text.includes(fold(b)));
+      if (!branch) return { text: 'Não reconheci essa filial. Escolha uma das opções.', flow };
+      return askTechAdd({ ...flow, branch });
+    }
+    return yes ? runTechAdd(flow) : null;
+  }
+  if (flow.kind === 'tech_off') {
+    if (flow.step === 'tech') {
+      const techs = await loadTechnicians();
+      const tech = techs.find((t) => t.id === input) || techInText(input, techs);
+      if (!tech) return { text: 'Não encontrei esse técnico.', flow };
+      return askTechOff({ ...flow, tech });
+    }
+    return yes ? runTechOff(flow) : null;
+  }
+  if (flow.kind === 'followup') {
+    if (flow.step === 'client') {
+      if (input.startsWith('__client|')) {
+        const picked = flow.candidates?.[Number(input.split('|')[1])];
+        if (picked) return askFollowup({ ...flow, client: picked.client, branch: picked.branch }, userBranches);
+      }
+      return askFollowup({ ...flow, client: input.trim(), branch: undefined }, userBranches);
+    }
+    return yes ? runFollowup(flow, user) : null;
+  }
+  if (flow.kind === 'machine_city') {
+    if (flow.step === 'pin') return askMachineCity({ ...flow, pin: serialInText(input) || input.toUpperCase().trim() });
+    if (flow.step === 'city') return askMachineCity({ ...flow, city: input.trim() });
+    return yes ? runMachineCity(flow, user) : null;
+  }
   if (input === '__cancel' || /^(cancela|cancelar|nao|desisto|esquece)\b/.test(text)) return { text: 'Tudo bem, cancelei. Nada foi alterado.', flow: null };
 
   if (flow.kind === 'tech_branch') {
