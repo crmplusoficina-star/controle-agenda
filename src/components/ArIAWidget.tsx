@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
-import { continueArIAFlow, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
+import { continueArIAFlow, intentMenu, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
 import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import { supabase } from '../lib/supabase';
@@ -337,10 +337,11 @@ export function ArIAWidget() {
         }
       } else {
         const flowReply = (flowRef.current ? await continueArIAFlow(flowRef.current, value, user, userBranches) : null)
-          || await askAgent(value)
-          || await startArIAFlow(value, user, userBranches);
+          || await startArIAFlow(value, user, userBranches)
+          || await askAgent(value);
         flowRef.current = flowReply?.flow ?? null;
         reply = flowReply || await answerSmartArIA(value, user) || await answerArIA(value, user);
+        if (!flowReply && reply.text.startsWith('Ainda não consegui interpretar')) reply = intentMenu(value) || reply;
         lastQuestionRef.current = value;
         lastAnswerRef.current = reply.text;
       }

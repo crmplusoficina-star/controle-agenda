@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import type { AppUser } from '../session';
 import type { ArIAAction, ArIAReply } from './ariaBrain';
 import { effectiveCity } from '../features/ServiceProgramsView';
+import { INTENT_LABELS, interpret, learnIntent, type NluIntent } from './ariaNlu';
 
 type Tech = { id: string; name: string; branch: string; active: boolean };
 type Machine = { serial: string; client: string; city: string; branch: string; label: string };
@@ -146,7 +147,8 @@ async function runTechBranch(flow: Extract<ArIAFlow, { kind: 'tech_branch' }>): 
 async function askSchedule(flow: Extract<ArIAFlow, { kind: 'schedule' }>, user: AppUser, userBranches: string[]): Promise<FlowReply> {
   if (!flow.machine) {
     if (flow.reason === 'Visita 150h' || flow.reason === 'Campanha de campo') {
-      const options = await pendingMachines(flow.reason, userBranches);
+      const own = flow.tech ? await pendingMachines(flow.reason, [flow.tech.branch]) : [];
+      const options = own.length ? own : await pendingMachines(flow.reason, userBranches);
       if (!options.length) return { text: `Não encontrei máquinas com ${flow.reason} pendente de programação nas suas filiais. Se quiser, digite o PIN da máquina.`, flow: { ...flow, step: 'machine' } };
       return { text: `Qual máquina? Estas estão com ${flow.reason === 'Visita 150h' ? 'Visita 150h' : 'campanha'} pendente de programação (digite o PIN se for outra):`, actions: options.map((m) => choice(m.label, m.serial)), flow: { ...flow, step: 'machine' } };
     }
@@ -408,7 +410,9 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
     case 'excluir_atendimento': {
       const op = intent === 'remarcar_atendimento' ? 'reschedule' : intent === 'concluir_atendimento' ? 'complete' : 'delete';
       const tech = findTech(a('tecnico'));
-      const candidates = await findAppointments(techs, tech, a('cliente_ou_pin'), date(a('data_atual') || a('data')), op === 'complete');
+      const when = date(a('data_atual') || a('data'));
+      let candidates = await findAppointments(techs, tech, a('cliente_ou_pin'), when, op === 'complete');
+      if (!candidates.length && when) candidates = await findAppointments(techs, tech, a('cliente_ou_pin'), undefined, op === 'complete');
       return askAppt({ kind: 'appt', op, step: 'pick', candidates, newDate: date(a('nova_data')), newTech: findTech(a('novo_tecnico')) });
     }
     case 'adicionar_tecnico':
@@ -451,71 +455,32 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
 
 // ---------- Entrada ----------
 
+async function nluContext() {
+  const [techs, branches] = await Promise.all([loadTechnicians(), loadActiveBranches()]);
+  return { technicians: techs.map((t) => ({ name: t.name, branch: t.branch })), branches };
+}
+
+const ACTION_HINT = /\b(agend|marc|remarc|reagend|troc|mud|pass|transfer|desativ|adicion|cadastr|abr|cri|conclu|finaliz|exclu|apag|cancel|desmarc|registr|coloc|jog|tir)/;
+
 export async function startArIAFlow(message: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
-  const text = fold(message);
+  if (/^(cancela|cancelar|cancele|desisto|esquece|deixa)\b/.test(fold(message)) && fold(message).split(' ').length <= 2) return { text: 'Não há nenhuma ação em andamento para cancelar.', flow: null };
+  const ctx = await nluContext();
+  const result = interpret(message, ctx);
+  if (result) {
+    const reply = await runArIAIntent(result.intent, result.args, user, userBranches);
+    if (reply) return reply;
+  }
+  return null;
+}
 
-  const techs0 = await loadTechnicians();
-  const techName = techInText(message, techs0)?.name || '';
-  const pin0 = serialInText(message);
-  const dates = Array.from(message.matchAll(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|amanh[ãa]|hoje|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado/gi)).map((m) => m[0]);
-  if (/\b(remarc|reagend|adiar|adia|antecip)|mud\w* .*data/.test(text)) {
-    return runArIAIntent('remarcar_atendimento', { tecnico: techName, cliente_ou_pin: pin0, data_atual: dates.length > 1 ? dates[0] : '', nova_data: dates.length ? dates[dates.length - 1] : '' }, user, userBranches);
+export function intentMenu(message: string): FlowReply | null {
+  if (ACTION_HINT.test(fold(message))) {
+    return {
+      text: 'Não tenho certeza do que você quer fazer. Escolha a ação e eu sigo daqui (vou lembrar dessa forma de pedir):',
+      actions: (Object.keys(INTENT_LABELS) as NluIntent[]).map((intent) => ({ label: INTENT_LABELS[intent], choice: `__intent|${intent}|${encodeURIComponent(message)}` })),
+      flow: null,
+    };
   }
-  if (/\b(conclu|finaliz)\w*.*(atendimento|visita|servico|os)\b|atendimento.*(conclu|finaliz|executad)/.test(text)) {
-    return runArIAIntent('concluir_atendimento', { tecnico: techName, cliente_ou_pin: pin0, data: dates[0] || '' }, user, userBranches);
-  }
-  if (/\b(exclu|apag|cancel)\w*.*(atendimento|agendamento|visita)/.test(text)) {
-    return runArIAIntent('excluir_atendimento', { tecnico: techName, cliente_ou_pin: pin0, data: dates[0] || '' }, user, userBranches);
-  }
-  if (/\b(adicion|cadastr|inclu|criar|novo)\w*.* tecnic/.test(text)) {
-    const branches = await loadActiveBranches();
-    const name = (message.match(/t[ée]cnico\s+([A-ZÀ-Úa-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)?)/) || [])[1] || '';
-    return runArIAIntent('adicionar_tecnico', { nome: branches.some((b) => fold(b) === fold(name)) ? '' : name, filial: branches.find((b) => text.includes(fold(b))) || '' }, user, userBranches);
-  }
-  if (/\b(desativ|inativ|remov|tirar)\w*.* tecnic/.test(text)) {
-    return runArIAIntent('desativar_tecnico', { tecnico: techName }, user, userBranches);
-  }
-  if (/\b(abr|cri|nov)\w*.*(follow|tratativa)/.test(text)) {
-    const client = (message.match(/(?:para|pro|pra|do|da|cliente)\s+(?:o |a )?cliente?\s*([^,.;]+)$/i) || [])[1] || '';
-    return runArIAIntent('criar_followup', { cliente: client.trim(), data_retorno: dates[0] || '' }, user, userBranches);
-  }
-  if (pin0 && /\b(cidade|esta em|fica em|localizad)/.test(text)) {
-    const city = (message.match(/(?:est[áa]|fica|localizada)\s+em\s+([^,.;]+)/i) || message.match(/cidade\s+(?:de\s+|é\s+)?([^,.;]+)/i) || [])[1] || '';
-    return runArIAIntent('informar_cidade_maquina', { pin: pin0, cidade: city.trim() }, user, userBranches);
-  }
-
-  if (/(troc|mud|transfer|mov|alter|passa)\w*.*filial|filial.*(do|da) tecnic/.test(text)) {
-    const techs = await loadTechnicians();
-    const tech = techInText(message, techs);
-    const branches = await loadActiveBranches();
-    const toBranch = branches.find((b) => text.includes(` ${fold(b)}`) && b !== tech?.branch);
-    return askTechBranch({ kind: 'tech_branch', step: 'tech', tech, toBranch });
-  }
-
-  if (/(aproveit|oportunidad|pendenc|campanha|150 ?h).*(rota|viagem|semana|tecnico)|(rota|viagem).*(aproveit|oportunidad|pendenc)/.test(text)) {
-    const techs = await loadTechnicians();
-    const tech = techInText(message, techs);
-    if (tech) return routeOpportunities(tech);
-  }
-
-  if (/pendenc|o que (tem|ha) (de|pra|para) (fazer|programar)|resumo.*(campanha|150)/.test(text)) {
-    const branches = await loadActiveBranches();
-    const named = branches.filter((b) => text.includes(fold(b)));
-    const scope = named.length ? named : userBranches.length ? userBranches : branches;
-    return branchPendencies(scope, named.length ? `de ${named.join(', ')}` : 'das suas filiais');
-  }
-
-  if (/\b(agend|marc|program)\w*/.test(text) && !/\b(como|onde|qual|quais)\b/.test(text)) {
-    const reason = reasonFromText(text) || 'Revisão OS cliente';
-    const serial = serialInText(message);
-    const machine = serial ? await machineBySerial(serial) : null;
-    const techs = await loadTechnicians();
-    const tech = techInText(message, techs);
-    const date = parseDate(message);
-    const flow: Extract<ArIAFlow, { kind: 'schedule' }> = { kind: 'schedule', step: 'machine', reason, machine: machine || (serial ? { serial, client: '', city: '', branch: '', label: serial } : undefined), tech, date: date || undefined };
-    return askSchedule(flow, user, userBranches);
-  }
-
   return null;
 }
 
@@ -526,6 +491,14 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     const machine = serial ? await machineBySerial(serial) : null;
     return askSchedule({ kind: 'schedule', step: 'machine', reason, machine: machine || undefined, tech: techs.find((t) => t.id === techId) }, user, userBranches);
   }
+  if (input.startsWith('__intent|')) {
+    const [, intent, encoded] = input.split('|');
+    const original = decodeURIComponent(encoded || '');
+    const ctx = await nluContext();
+    learnIntent(original, intent as NluIntent, ctx);
+    const forced = interpret(original, ctx, intent as NluIntent);
+    return runArIAIntent(intent, forced?.args || {}, user, userBranches);
+  }
   if (input.startsWith('__route|')) {
     const tech = (await loadTechnicians()).find((t) => t.id === input.split('|')[1]);
     return tech ? routeOpportunities(tech) : null;
@@ -533,7 +506,10 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
   if (!flow) return null;
   const text = fold(input);
   if (input === '__cancel' || /^(cancela|cancelar|nao|desisto|esquece)\b/.test(text)) return { text: 'Tudo bem, cancelei. Nada foi alterado.', flow: null };
-  if (!input.startsWith('__') && input.length > 3 && /\b(agend|remarc|reagend|troc|mud|desativ|adicion|cadastr|abr|cri|conclu|exclu|apag|pendenc|aproveit|quais|qual |quem|mostr|ver |maquina|cidade|esta em)/.test(text) && flow.step !== 'confirm') return null;
+  if (!input.startsWith('__') && input.length > 3 && flow.step !== 'confirm') {
+    const fresh = interpret(input, await nluContext());
+    if ((fresh && fresh.score >= 6) || /^(quais|qual|quem|mostr|ver )/.test(text)) return null;
+  }
   const yes = input === '__confirm' || /^(sim|confirm|pode|ok|isso)/.test(text);
 
   if (flow.kind === 'appt') {
