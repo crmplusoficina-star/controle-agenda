@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
-import { alternativesFor, continueArIAFlow, intentMenu, markUnresolved, refineLastIntent, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
+import { alternativesFor, applyCorrection, continueArIAFlow, intentMenu, markUnresolved, refineLastIntent, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
 import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import { supabase } from '../lib/supabase';
@@ -337,6 +337,10 @@ export function ArIAWidget() {
       } else if (refined) {
         flowRef.current = refined.flow ?? null;
         reply = refined;
+        lastAnswerRef.current = reply.text;
+      } else if (isArIACorrection(value) && lastQuestionRef.current && (reply = await applyCorrection(lastQuestionRef.current, value, user, userBranches) || undefined)) {
+        flowRef.current = reply.flow ?? null;
+        void learnCorrectionResilient(lastQuestionRef.current, lastAnswerRef.current, value, user);
         lastAnswerRef.current = reply.text;
       } else if (isArIACorrection(value) && lastQuestionRef.current) {
         flowRef.current = null;
