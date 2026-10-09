@@ -425,7 +425,7 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     case 'ajuda':
     case 'aprendizado':
     case 'sugestoes': best.args = {}; break;
-    case 'planejar_regiao': best.args = { tecnico: slots.tech, periodo: pastWords(text) ? 'passado' : /proxima semana|semana que vem|pra frente|proximos dias|vai atender/.test(text) ? 'futuro' : '', meses: (text.match(/\b(\d{1,2})\s*meses?\b/) || [])[1] || '', foco: /retenc|inativ|contato|prospec|parad/.test(text) ? 'retencao' : '' }; break;
+    case 'planejar_regiao': best.args = { tecnico: slots.tech, periodo: pastWords(text) ? 'passado' : /proxima semana|semana que vem|pra frente|proximos dias|vai atender/.test(text) ? 'futuro' : '', meses: (text.match(/\b(\d{1,2})\s*meses?\b/) || [])[1] || '', foco: /retenc|inativ|contato|prospec|parad/.test(text) ? 'retencao' : '', qtd: (text.match(/\b(\d{1,2})\s+(?:clientes?|sugestoes?|opcoes?)\b/) || [])[1] || '' }; break;
   }
   return best;
 }
