@@ -838,7 +838,7 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
       if (!tech) return { text: 'De qual técnico você quer que eu analise a região?', actions: techs.slice(0, 12).map((t) => choice(`${t.name} · ${t.branch}`, `__say|analise a região do ${t.name}${a('periodo') === 'passado' ? ' pra trás' : ''}`)), flow: null };
       remember(tech.name);
       if (lastRun) lastRun.args.tecnico = tech.name;
-      return planejarRegiao(tech, a('periodo'), Number(a('meses')) || 6, a('foco'));
+      return planejarRegiao(tech, a('periodo'), Number(a('meses')) || 6, a('foco'), Number(a('qtd')) || 3);
     }
     case 'sugestoes': return sugestoesGerais(user, userBranches, techs);
     case 'aprendizado': return learningReport();
@@ -1019,7 +1019,7 @@ async function freeDays(tech: Tech, count = 5) {
   return days.filter((d) => !busy.has(d) && new Date(`${d}T12:00:00`).getDay() !== 6).slice(0, count);
 }
 
-async function planejarRegiao(tech: Tech, periodo: string, minMonths: number, foco = ''): Promise<FlowReply> {
+async function planejarRegiao(tech: Tech, periodo: string, minMonths: number, foco = '', qtd = 3): Promise<FlowReply> {
   const today = new Date();
   const [wFrom, wTo] = weekRange();
   let from = wFrom; let to = wTo; let label = `nesta semana (${brDate(wFrom)} a ${brDate(wTo)})`;
@@ -1063,7 +1063,9 @@ async function planejarRegiao(tech: Tech, periodo: string, minMonths: number, fo
   const visited = new Set(cities.flatMap((c) => Array.from(c.clients)));
 
   const regional = clients.filter((c) => cityKeys.has(fold(c.city)) && !visited.has(fold(c.client_name)));
-  const inactive = rankInactive(regional, minMonths, skip).slice(0, foco === 'retencao' ? 12 : 8);
+  const ranked = rankInactive(regional, minMonths, skip);
+  // Padrão: no máximo 3 clientes; mais só quando o usuário pede.
+  const inactive = ranked.slice(0, Math.max(1, Math.min(20, qtd)));
   const pend150 = (insp.data || []).filter((r: any) => cityKeys.has(fold(effectiveCity(r))));
   const pendCamp = (camp.data || []).filter((r: any) => cityKeys.has(fold(effectiveCity(r))));
   const free = await freeDays(tech);
@@ -1075,6 +1077,7 @@ async function planejarRegiao(tech: Tech, periodo: string, minMonths: number, fo
   if (inactive.length) {
     parts.push(`\nClientes parados há ${minMonths}+ meses nessas cidades (sem follow-up aberto):\n${inactive.map((c, i) => `${i + 1}. ${c.client_name} · ${c.city} · ${monthsSince(c.last_service_at)} meses sem atendimento · ${Number(c.service_count || 0)} OS · ${Number(c.machine_count || 0)} máq.`).join('\n')}`);
   } else parts.push(`\nNão há clientes parados há ${minMonths}+ meses nessas cidades que já não estejam em follow-up.`);
+  if (ranked.length > inactive.length) parts.push(`(Há mais ${ranked.length - inactive.length} cliente(s) parados nessa região. Peça "mostra mais" ou "me dá 10 clientes".)`);
   if (foco !== 'retencao' && (pend150.length || pendCamp.length)) parts.push(`\nPendências na mesma região: ${pend150.length} Visita 150h e ${pendCamp.length} campanha(s) em aberto.`);
   if (free.length) parts.push(`\nDias livres do ${tech.name}: ${free.map(brDate).join(', ')}.`);
   const top = cities[0]?.name;
@@ -1088,7 +1091,7 @@ async function planejarRegiao(tech: Tech, periodo: string, minMonths: number, fo
 
   const prospects = inactive.map((c) => ({ client_name: c.client_name, branch: c.branch, city: c.city }));
   const actions: any[] = [
-    ...inactive.slice(0, 4).map((c) => ({ label: `Agendar visita: ${c.client_name.slice(0, 28)}`, choice: `__visit|${encodeURIComponent(c.client_name)}|${encodeURIComponent(c.city || '')}|${c.branch}|${tech.id}` })),
+    ...inactive.slice(0, 3).map((c) => ({ label: `Agendar visita: ${c.client_name.slice(0, 28)}`, choice: `__visit|${encodeURIComponent(c.client_name)}|${encodeURIComponent(c.city || '')}|${c.branch}|${tech.id}` })),
     ...(prospects.length ? [{ label: `Prospectar os ${prospects.length} no Follow-up`, operation: 'prospect', prospects }] : []),
     ...(foco === 'retencao' ? [] : pend150).filter((r: any) => r.pin).slice(0, 2).map((r: any) => ({ label: `Agendar 150h ${r.client_name || r.pin}`.slice(0, 40), choice: `__schedule|Visita 150h|${r.pin}|${tech.id}` })),
     ...(periodo !== 'passado' ? [{ label: 'Ver onde ele esteve (pra trás)', choice: `__say|analise a região do ${tech.name} pra trás` }] : [{ label: 'Ver a semana que vem', choice: `__say|planejar região do ${tech.name} semana que vem` }]),
@@ -1163,6 +1166,7 @@ export async function refineLastIntent(message: string, user: AppUser, userBranc
     const months = (t.match(/\b(\d{1,2})\s*meses?\b/) || [])[1];
     if (dates.length && /^(e |mas |nao |agora |e pra |e para |pra |para )?(hoje|amanha|ontem|depois|segunda|terca|quarta|quinta|sexta|sabado|dia|\d)/.test(t)) { args.data = dates[0]; note = `Refiz para ${brDate(dates[0])}.`; }
     else if (months && intent === 'planejar_regiao' && t.split(' ').length <= 5) { args.meses = months; note = `Refiz com clientes parados há ${months}+ meses.`; }
+    else if (intent === 'planejar_regiao' && /^(mostra |me da |quero |manda |traz )?(mais|outros|outras|mais clientes|mais opcoes|mais sugestoes|\d{1,2} clientes?)\b/.test(t)) { const n = Number((t.match(/\b(\d{1,2})\b/) || [])[1]); args.qtd = String(n || (Number(args.qtd) || 3) + 3); note = `Mostrando ${args.qtd} clientes.`; }
     else if (/retenc|inativ|so clientes|apenas clientes|somente clientes/.test(t) && ['planejar_regiao', 'onde_tecnico', 'oportunidades_rota'].includes(intent)) { intent = 'planejar_regiao'; args.foco = 'retencao'; note = 'Refiz só com a Retenção (clientes parados).'; }
     else if (/150|campanha|tudo|completo/.test(t) && intent === 'planejar_regiao') { args.foco = ''; note = 'Refiz com 150h e campanhas também.'; }
     else return null;
