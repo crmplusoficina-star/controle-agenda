@@ -164,9 +164,9 @@ type Slots = { tech: string; branch: string; dates: string[]; pin: string; city:
 const QUESTION = /^ (quem|quais|qual|quanto|quantos|quantas|como|onde|quando|tem |existe|o que) /;
 
 const RULES: Rule[] = [
-  { intent: 'trocar_filial_tecnico', strong: ['realoc'], weak: ['troc', 'mud', 'transfer', 'pass', 'mov', 'alter', 'jog', 'coloc', 'associ', 'lev', 'mand', 'vai atender'], objects: ['filial', 'base', 'unidade', 'regional'], bonus: (s) => (s.tech && s.branch && !s.dates.length ? 4 : 0) - (s.dates.length ? 4 : 0) },
+  { intent: 'trocar_filial_tecnico', strong: ['realoc'], weak: ['troc', 'mud', 'transfer', 'pass', 'mov', 'alter', 'jog', 'coloc', 'associ', 'lev', 'mand', 'vai atender', 'devolv', 'volt', 'retorn'], objects: ['filial', 'base', 'unidade', 'regional'], bonus: (s) => (s.tech && s.branch && !s.dates.length ? 4 : 0) - (s.dates.length ? 4 : 0) },
   { intent: 'agendar_atendimento', strong: ['agend', 'encaix', 'novo atendimento', 'nova visita', 'coloc na agenda', 'coloca na agenda', 'program', 'marc'], weak: ['cri', 'mand', 'bot', 'coloc'], objects: ['visita', 'atendimento', '150', '150h', 'campanha', 'revisao', 'garantia', 'diagnostico', 'pmp', 'entrega'], bonus: (s, t) => (s.pin ? 2 : 0) - (QUESTION.test(t) ? 5 : 0) },
-  { intent: 'remarcar_atendimento', strong: ['remarc', 'reagend', 'adi', 'antecip', 'posterg', 'empurr'], weak: ['troc', 'mud', 'pass', 'jog', 'transfer', 'mov', 'bot', 'coloc'], objects: ['dia', 'data', 'atendimento', 'visita', 'agendamento', 'horario'], bonus: (s) => (s.dates.length ? 3 : 0) - (s.branch && !s.dates.length ? 4 : 0) },
+  { intent: 'remarcar_atendimento', strong: ['remarc', 'reagend', 'adi', 'antecip', 'posterg', 'empurr'], weak: ['troc', 'mud', 'pass', 'jog', 'transfer', 'mov', 'bot', 'coloc', 'volt', 'devolv'], objects: ['dia', 'data', 'atendimento', 'visita', 'agendamento', 'horario'], bonus: (s) => (s.dates.length ? 3 : 0) - (s.branch && !s.dates.length ? 4 : 0) },
   { intent: 'concluir_atendimento', strong: ['conclu', 'finaliz', 'termin', 'execut', 'baix', 'feito', 'realiz'], weak: ['encerr', 'fech'], objects: ['atendimento', 'visita', 'servico', 'os', 'ordem'] },
   { intent: 'excluir_atendimento', strong: ['exclu', 'apag', 'cancel', 'desmarc', 'delet'], weak: ['remov', 'tir'], objects: ['atendimento', 'agendamento', 'visita', 'agenda', 'os'], bonus: (s, t) => (/\btecnic/.test(t) ? -4 : 0) - (!s.tech && !s.pin && !s.dates.length && !/atendiment|agendament|visita|agenda/.test(t) ? 4 : 0) },
   { intent: 'adicionar_tecnico', strong: ['contrat', 'entrou'], weak: ['adicion', 'cadastr', 'inclu', 'cri', 'novo', 'nova', 'registr'], objects: ['tecnico', 'tecnica', 'mecanico'] },
@@ -212,9 +212,13 @@ function learnedIntent(text: string, ctx: NluContext): NluIntent | null {
   return best?.intent || null;
 }
 
-export function interpret(raw: string, ctx: NluContext, forced?: NluIntent): NluResult | null {
+export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memory?: { tech?: string }): NluResult | null {
   const text = normalize(raw);
-  const tech = matchTechnician(text, ctx.technicians);
+  let tech = matchTechnician(text, ctx.technicians);
+  if (!tech && memory?.tech && /\b(ele|ela|dele|dela|o mesmo|a mesma|esse tecnico|essa tecnica|mesmo tecnico|nele|nela)\b/.test(text)) {
+    const remembered = ctx.technicians.find((t) => t.name === memory.tech);
+    if (remembered) tech = { ...remembered, score: 3 };
+  }
   const slots: Slots = {
     tech: tech?.name || '',
     branch: matchBranch(text, ctx.branches, tech?.branch),

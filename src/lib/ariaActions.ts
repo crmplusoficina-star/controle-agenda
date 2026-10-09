@@ -14,11 +14,20 @@ export type ArIAFlow =
   | { kind: 'tech_add'; step: 'name' | 'branch' | 'confirm'; name?: string; branch?: string }
   | { kind: 'tech_off'; step: 'tech' | 'confirm'; tech?: Tech }
   | { kind: 'followup'; step: 'client' | 'confirm'; client?: string; branch?: string; notes?: string; date?: string; candidates?: { client: string; branch: string }[] }
-  | { kind: 'machine_city'; step: 'pin' | 'city' | 'confirm'; pin?: string; city?: string };
+  | { kind: 'machine_city'; step: 'pin' | 'city' | 'confirm'; pin?: string; city?: string }
+  | { kind: 'undo'; step: 'confirm' };
 
 type Appt = { id: string; appointment_date: string; client_name: string | null; equipment_serial: string | null; service_city: string | null; service_reason: string | null; technician_id: string; branch: string; techName: string };
 
 export type FlowReply = ArIAReply & { flow: ArIAFlow | null };
+
+// Memória curta da conversa: último técnico citado e a última ação desfazível.
+const memory = { tech: '' };
+let lastUndo: { label: string; run: () => Promise<string | null> } | null = null;
+
+function remember(techName?: string) {
+  if (techName) memory.tech = techName;
+}
 
 const dateFmt = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
 const WEEKDAYS = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'];
@@ -138,6 +147,9 @@ async function askTechBranch(flow: Extract<ArIAFlow, { kind: 'tech_branch' }>): 
 async function runTechBranch(flow: Extract<ArIAFlow, { kind: 'tech_branch' }>): Promise<FlowReply> {
   const { error } = await supabase.from('technicians').update({ branch: flow.toBranch }).eq('id', flow.tech!.id);
   if (error) return { text: `Não consegui trocar a filial: ${error.message}`, flow: null };
+  const tech = flow.tech!;
+  remember(tech.name);
+  lastUndo = { label: `devolver ${tech.name} para ${tech.branch}`, run: async () => (await supabase.from('technicians').update({ branch: tech.branch }).eq('id', tech.id)).error?.message || null };
   window.dispatchEvent(new CustomEvent('aria:data-changed'));
   return { text: `Pronto. ${flow.tech!.name} agora está na filial ${flow.toBranch}.`, actions: [{ label: 'Abrir Agenda', view: 'agenda' }], flow: null };
 }
@@ -178,7 +190,7 @@ async function askSchedule(flow: Extract<ArIAFlow, { kind: 'schedule' }>, user: 
 }
 
 async function runSchedule(flow: Extract<ArIAFlow, { kind: 'schedule' }>): Promise<FlowReply> {
-  const { error } = await supabase.from('appointments').insert({
+  const { data: created, error } = await supabase.from('appointments').insert({
     branch: flow.tech!.branch,
     appointment_date: flow.date,
     technician_id: flow.tech!.id,
@@ -187,8 +199,11 @@ async function runSchedule(flow: Extract<ArIAFlow, { kind: 'schedule' }>): Promi
     service_city: flow.machine!.city || null,
     service_reason: flow.reason,
     description: `Agendado pela ArIA`,
-  });
+  }).select('id').single();
   if (error) return { text: `Não consegui criar o agendamento: ${error.message}`, flow: null };
+  remember(flow.tech!.name);
+  const createdId = (created as any)?.id;
+  lastUndo = createdId ? { label: `apagar o agendamento criado (${flow.reason}, ${brDate(flow.date!)})`, run: async () => (await supabase.from('appointments').delete().eq('id', createdId)).error?.message || null } : null;
   window.dispatchEvent(new CustomEvent('aria:data-changed'));
   const extra = flow.reason === 'Visita 150h' || flow.reason === 'Campanha de campo' ? ' A data de programação já foi preenchida na tela de pendências.' : '';
   return { text: `Pronto. ${flow.reason} agendada para ${flow.tech!.name} em ${brDate(flow.date!)}.${extra}`, actions: [{ label: 'Abrir Agenda', view: 'agenda' }], flow: null };
@@ -295,6 +310,12 @@ async function runAppt(flow: Extract<ArIAFlow, { kind: 'appt' }>): Promise<FlowR
     ({ error } = await supabase.from('appointments').delete().eq('id', a.id));
   }
   if (error) return { text: `Não consegui ${OP_LABEL[flow.op]}: ${error.message}`, flow: null };
+  remember(a.techName);
+  lastUndo = flow.op === 'reschedule'
+    ? { label: `voltar o atendimento para ${brDate(a.appointment_date)} com ${a.techName}`, run: async () => (await supabase.from('appointments').update({ appointment_date: a.appointment_date, technician_id: a.technician_id, branch: a.branch }).eq('id', a.id)).error?.message || null }
+    : flow.op === 'complete'
+      ? { label: `reabrir o atendimento de ${brDate(a.appointment_date)}`, run: async () => (await supabase.from('appointments').update({ status: 'planejado' }).eq('id', a.id)).error?.message || null }
+      : null;
   window.dispatchEvent(new CustomEvent('aria:data-changed'));
   const done = flow.op === 'reschedule' ? 'remarcado' : flow.op === 'complete' ? 'concluído' : 'excluído';
   return { text: `Pronto. Atendimento ${done}.`, actions: [{ label: 'Abrir Agenda', view: 'agenda' }], flow: null };
@@ -309,7 +330,11 @@ async function askTechAdd(flow: Extract<ArIAFlow, { kind: 'tech_add' }>): Promis
 }
 
 async function runTechAdd(flow: Extract<ArIAFlow, { kind: 'tech_add' }>): Promise<FlowReply> {
-  const { error } = await supabase.from('technicians').insert({ name: flow.name, branch: flow.branch, active: true });
+  const { data: created, error } = await supabase.from('technicians').insert({ name: flow.name, branch: flow.branch, active: true }).select('id').single();
+  if (!error && created) {
+    remember(flow.name);
+    lastUndo = { label: `remover o cadastro de ${flow.name}`, run: async () => (await supabase.from('technicians').delete().eq('id', (created as any).id)).error?.message || null };
+  }
   if (error) return { text: error.code === '23505' ? `Já existe um técnico ${flow.name} em ${flow.branch}.` : `Não consegui cadastrar: ${error.message}`, flow: null };
   window.dispatchEvent(new CustomEvent('aria:data-changed'));
   return { text: `Pronto. ${flow.name} foi cadastrado em ${flow.branch}.`, actions: [{ label: 'Abrir Agenda', view: 'agenda' }], flow: null };
@@ -323,6 +348,9 @@ async function askTechOff(flow: Extract<ArIAFlow, { kind: 'tech_off' }>): Promis
 async function runTechOff(flow: Extract<ArIAFlow, { kind: 'tech_off' }>): Promise<FlowReply> {
   const { error } = await supabase.from('technicians').update({ active: false }).eq('id', flow.tech!.id);
   if (error) return { text: `Não consegui desativar: ${error.message}`, flow: null };
+  const off = flow.tech!;
+  remember(off.name);
+  lastUndo = { label: `reativar ${off.name}`, run: async () => (await supabase.from('technicians').update({ active: true }).eq('id', off.id)).error?.message || null };
   window.dispatchEvent(new CustomEvent('aria:data-changed'));
   return { text: `Pronto. ${flow.tech!.name} foi desativado.`, flow: null };
 }
@@ -347,12 +375,13 @@ async function askFollowup(flow: Extract<ArIAFlow, { kind: 'followup' }>, userBr
 }
 
 async function runFollowup(flow: Extract<ArIAFlow, { kind: 'followup' }>, user: AppUser): Promise<FlowReply> {
-  const { error } = await supabase.from('followups').insert({
+  const { data: created, error } = await supabase.from('followups').insert({
     branch: flow.branch, client_name: flow.client, stage: 'prospectar',
     next_followup_date: flow.date || null, notes: flow.notes || 'Aberto pela ArIA',
     created_by_matricula: user.matricula, created_by_name: user.name, updated_by_matricula: user.matricula, updated_by_name: user.name,
-  });
+  }).select('id').single();
   if (error) return { text: `Não consegui abrir o follow-up: ${error.message}`, flow: null };
+  lastUndo = created ? { label: `apagar o follow-up de ${flow.client}`, run: async () => (await supabase.from('followups').delete().eq('id', (created as any).id)).error?.message || null } : null;
   window.dispatchEvent(new CustomEvent('aria:data-changed'));
   return { text: `Pronto. Follow-up aberto para ${flow.client}.`, actions: [{ label: 'Abrir Follow-up', view: 'followup' }], flow: null };
 }
@@ -464,8 +493,31 @@ const ACTION_HINT = /\b(agend|marc|remarc|reagend|troc|mud|pass|transfer|desativ
 
 export async function startArIAFlow(message: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
   if (/^(cancela|cancelar|cancele|desisto|esquece|deixa)\b/.test(fold(message)) && fold(message).split(' ').length <= 2) return { text: 'Não há nenhuma ação em andamento para cancelar.', flow: null };
+  const t = fold(message);
+  if (/^(oi|ola|ole|bom dia|boa tarde|boa noite|e ai|eai|hey|opa|salve|tudo bem|tudo bom)\b/.test(t) && t.split(' ').length <= 5) {
+    const hour = new Date().getHours();
+    const hello = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+    return {
+      text: `${hello}, ${user.name.split(' ')[0]}! Em que posso ajudar? Você pode pedir do seu jeito, por exemplo:`,
+      actions: [
+        { label: 'Pendências da minha filial', choice: '__say|quais as pendências da minha filial' },
+        { label: 'Agendar Visita 150h', choice: '__say|agendar visita 150h' },
+        { label: 'Quem ligar hoje', choice: '__say|quem devo ligar hoje' },
+        { label: 'O que você faz?', choice: '__say|o que você consegue fazer?' },
+      ],
+      flow: null,
+    };
+  }
+  if (/^(obrigad|valeu|vlw|brigad|show|top|perfeito|otimo|beleza|blz|massa)\b/.test(t) && t.split(' ').length <= 5) {
+    return { text: 'Por nada! Se precisar de mais alguma coisa, é só pedir.', flow: null };
+  }
+  if (/^(desfaz|desfazer|volta atras|voltar atras|reverte|reverter|desfaca|anula)/.test(t)) {
+    if (!lastUndo) return { text: 'Não tenho nenhuma ação recente para desfazer nesta conversa.', flow: null };
+    return { text: `Quer desfazer a última ação: ${lastUndo.label}?`, actions: CONFIRM, flow: { kind: 'undo', step: 'confirm' } };
+  }
   const ctx = await nluContext();
-  const result = interpret(message, ctx);
+  const result = interpret(message, ctx, undefined, memory);
+  if (result?.args?.tecnico) remember(result.args.tecnico);
   if (result) {
     const reply = await runArIAIntent(result.intent, result.args, user, userBranches);
     if (reply) return reply;
@@ -499,6 +551,7 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     const forced = interpret(original, ctx, intent as NluIntent);
     return runArIAIntent(intent, forced?.args || {}, user, userBranches);
   }
+  if (input.startsWith('__say|')) return startArIAFlow(input.slice(6), user, userBranches);
   if (input.startsWith('__route|')) {
     const tech = (await loadTechnicians()).find((t) => t.id === input.split('|')[1]);
     return tech ? routeOpportunities(tech) : null;
@@ -512,6 +565,15 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
   }
   const yes = input === '__confirm' || /^(sim|confirm|pode|ok|isso)/.test(text);
 
+  if (flow.kind === 'undo') {
+    if (!yes || !lastUndo) return null;
+    const undo = lastUndo;
+    lastUndo = null;
+    const failure = await undo.run();
+    if (failure) return { text: `Não consegui desfazer: ${failure}`, flow: null };
+    window.dispatchEvent(new CustomEvent('aria:data-changed'));
+    return { text: `Pronto, desfeito: ${undo.label}.`, flow: null };
+  }
   if (flow.kind === 'appt') {
     if (flow.step === 'pick') {
       const appt = flow.candidates?.find((c) => c.id === input);
