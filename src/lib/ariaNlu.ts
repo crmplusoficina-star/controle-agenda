@@ -7,7 +7,8 @@ export type NluIntent =
   | 'informar_cidade_maquina' | 'oportunidades_rota' | 'pendencias_filial' | 'navegar' | 'tecnicos_ociosos'
   | 'agenda_dia' | 'onde_tecnico' | 'carga_semana' | 'faturamento' | 'pendentes_faturamento' | 'faturar_atendimento'
   | 'historico_maquina' | 'registrar_horimetro' | 'contato_cliente' | 'salvar_contato' | 'atendimentos_incompletos'
-  | 'pendencias_atrasadas' | 'resumo_semana' | 'folga_ferias' | 'realocar_dia' | 'adicionar_observacao' | 'ajuda';
+  | 'pendencias_atrasadas' | 'resumo_semana' | 'folga_ferias' | 'realocar_dia' | 'adicionar_observacao' | 'ajuda'
+  | 'planejar_regiao' | 'sugestoes';
 
 export type NluResult = { intent: NluIntent; score: number; args: Record<string, string> };
 export type NluContext = { technicians: { name: string; branch: string }[]; branches: string[] };
@@ -43,6 +44,8 @@ export const INTENT_LABELS: Record<NluIntent, string> = {
   realocar_dia: 'Técnico faltou (passar agenda)',
   adicionar_observacao: 'Anotar no atendimento',
   ajuda: 'O que a ArIA faz',
+  planejar_regiao: 'Analisar região do técnico',
+  sugestoes: 'Sugestões do dia',
 };
 
 const STOP = new Set(['o', 'a', 'os', 'as', 'de', 'do', 'da', 'dos', 'das', 'para', 'pra', 'pro', 'em', 'no', 'na', 'e', 'um', 'uma', 'que', 'com', 'por', 'me', 'eu', 'voce', 'favor', 'gostaria', 'quero', 'queria', 'preciso', 'pode', 'consegue', 'ai', 'ali', 'ja', 'hoje', 'ele', 'ela', 'dele', 'dela', 'esse', 'essa', 'este', 'esta', 'tecnico', 'tecnica', 'filial', 'atendimento', 'agendamento', 'visita', 'cliente']);
@@ -213,7 +216,9 @@ const RULES: Rule[] = [
   { intent: 'folga_ferias', strong: ['folga', 'ferias', 'atestado', 'licenca', 'day off', 'afastad', 'abonar', 'dispensad'], weak: ['dar', 'lanc', 'coloc', 'registr', 'marc', 'bot'], bonus: (s, t) => (s.tech ? 2 : 0) - (QUESTION.test(t) ? 5 : 0) },
   { intent: 'realocar_dia', strong: ['faltou', 'nao veio', 'nao vai vir', 'nao vem', 'doente', 'passa os atendimentos', 'passar os atendimentos', 'todos os atendimentos', 'agenda inteira', 'agenda toda', 'cobrir', 'substitu', 'no lugar do', 'no lugar da'], bonus: (_s, t) => 4 - (/folga|ferias/.test(t) ? 7 : 0) },
   { intent: 'adicionar_observacao', strong: ['observacao', 'anota no', 'anotar no', 'escreve no', 'coloca na descricao', 'adiciona na descricao', 'nota no', 'lembrete no'], objects: ['atendimento', 'visita', 'agendamento'] },
-  { intent: 'ajuda', strong: ['o que voce faz', 'o que voce consegue', 'o que vc faz', 'como voce pode ajudar', 'ajuda', 'comandos', 'exemplos', 'me ensina', 'como usar', 'suas funcoes', 'o que da pra fazer', 'o que posso pedir'] },
+  { intent: 'planejar_regiao', strong: ['regiao', 'planej', 'analis', 'analiz', 'onde ele tava', 'onde ele estava', 'onde ela estava', 'onde esteve', 'por onde', 'onde passou', 'onde atendeu', 'onde ele atendeu', 'inteligente', 'clientes ali', 'clientes por perto', 'clientes perto', 'redondeza', 'arredores', 'proximidade', 'sugest', 'sugir', 'suger', 'roteiro'], objects: ['visita', 'visitas', 'clientes', 'semana', 'rota'], bonus: (s) => (s.tech ? 4 : -5) },
+  { intent: 'sugestoes', strong: ['sugest', 'sugir', 'suger', 'me indica', 'prioriz', 'recomend', 'dica', 'ideia', 'o que eu faco', 'o que fazer', 'por onde comeco', 'prioridade', 'oportunidades do dia', 'o que priorizar'], bonus: (s, t) => (s.tech ? -6 : 0) - (/\b\d{1,2}\s+clientes?\b/.test(t) || (/\bclientes?\b/.test(t) && /\bem [a-z]{3,}/.test(t)) ? 6 : 0) },
+  { intent: 'ajuda', strong: ['o que voce faz', 'o que voce consegue', 'o que vc faz', 'como voce pode ajudar', 'ajuda', 'comandos', 'exemplos', 'me ensina', 'como usar', 'suas funcoes', 'o que da pra fazer', 'o que posso pedir'], bonus: (_s, t) => (t.trim().split(' ').length > 6 ? -3 : 0) },
   { intent: 'navegar', strong: ['ir para', 'vai para', 'me leva', 'leva para'], weak: ['abr', 'mostr', 'acess', 'entra'], objects: ['tela', 'agenda', 'retencao', 'mapa', 'followup', 'dashboard', 'painel', 'campanhas', '150', 'usuarios'] },
 ];
 
@@ -249,6 +254,23 @@ function learnedIntent(text: string, ctx: NluContext): NluIntent | null {
     if (sim >= 0.6 && (!best || sim > best.sim)) best = { intent: item.intent, sim };
   }
   return best?.intent || null;
+}
+
+export function pastWords(text: string) {
+  return /pra tras|para tras|passad|d-1|d - 1|d1\b|anterior|ultimos dias|ultima semana|ontem|esteve|estava|tava\b|passou|atendeu|ja foi|foi atendid/.test(normalize(text));
+}
+
+// Intenções mais prováveis (para oferecer alternativas quando a ArIA errar).
+export function rankIntents(raw: string, ctx: NluContext, limit = 5): NluIntent[] {
+  const text = normalize(raw);
+  const slots: Slots = { tech: matchTechnician(text, ctx.technicians)?.name || '', branch: matchBranch(text, ctx.branches), dates: extractDates(raw), pin: extractPin(raw), city: '', screen: '' };
+  return RULES.map((rule) => {
+    const strong = hasStem(text, rule.strong);
+    const weak = !strong && rule.weak ? hasStem(text, rule.weak) : false;
+    const object = rule.objects ? hasStem(text, rule.objects, true) : false;
+    const score = (strong ? 5 : weak ? 2 : 0) + (object ? 2 : 0) + (strong || weak || object ? (rule.bonus ? rule.bonus(slots, text) : 0) : -99);
+    return { intent: rule.intent, score };
+  }).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, limit).map((r) => r.intent);
 }
 
 export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memory?: { tech?: string }): NluResult | null {
@@ -349,7 +371,9 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
       break;
     }
     case 'adicionar_observacao': best.args = { tecnico: slots.tech, cliente_ou_pin: slots.pin, data: d1 || '', texto: (raw.match(/[:\-–]\s*(.+)$/) || [])[1] || '' }; break;
-    case 'ajuda': best.args = {}; break;
+    case 'ajuda':
+    case 'sugestoes': best.args = {}; break;
+    case 'planejar_regiao': best.args = { tecnico: slots.tech, periodo: pastWords(text) ? 'passado' : /proxima semana|semana que vem|pra frente|proximos dias|vai atender/.test(text) ? 'futuro' : '', meses: (text.match(/\b(\d{1,2})\s*meses?\b/) || [])[1] || '' }; break;
   }
   return best;
 }
