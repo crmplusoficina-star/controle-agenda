@@ -8,6 +8,7 @@ export type ArIAAction = {
   mode?: 'list' | 'map';
   tab?: 'active' | 'calendar' | 'history';
   tutorial?: boolean;
+  choice?: string;
 };
 
 export type ArIAReply = { text: string; actions?: ArIAAction[] };
@@ -56,7 +57,11 @@ function weekBounds() {
 
 function capabilities(): ArIAReply {
   return {
-    text: `Posso trabalhar com o contexto real do sistema, não apenas responder perguntas. Hoje consigo:\n\n• consultar a Agenda e os próximos atendimentos de qualquer técnico;\n• identificar as cidades onde um técnico estará na semana e sugerir clientes da Retenção naquela região;\n• buscar clientes inativos por cidade e por tempo sem atendimento, inclusive pedidos como “3 clientes de Barcarena há mais de 1 ano”;\n• mostrar contatos de Follow-up vencidos ou para hoje;\n• consultar oportunidades abertas com valor;\n• resumir cliente, máquinas, histórico G4 e o que foi feito no último atendimento;\n• consultar as faixas reais de Retenção: até 3, 3–6, 6–12, 12–18 e +18 meses;\n• abrir Agenda, Retenção, mapa, Follow-up, Histórico e Dashboard;\n• repetir o tutorial quando você pedir;\n• aprender com correções dos usuários. Se eu interpretar algo errado, diga “não, o correto é...” ou “corrigindo: ...”. Eu registro a correção para melhorar pedidos semelhantes.\n\nQuando eu sugerir clientes pela rota, eu não trato isso como oportunidade já aberta: são clientes potenciais encontrados pela Agenda + Retenção. E não afirmo distância ou tempo sem um cálculo real de rota.`,
+    text: `Posso trabalhar com o contexto real do sistema, não apenas responder perguntas. Hoje consigo:\n\n• consultar a Agenda e os próximos atendimentos de qualquer técnico;\n• identificar as cidades onde um técnico estará na semana e sugerir clientes da Retenção naquela região;\n• buscar clientes inativos por cidade e por tempo sem atendimento, inclusive pedidos como “3 clientes de Barcarena há mais de 1 ano”;\n• mostrar contatos de Follow-up vencidos ou para hoje;\n• consultar oportunidades abertas com valor;\n• resumir cliente, máquinas, histórico G4 e o que foi feito no último atendimento;\n• consultar as faixas reais de Retenção: até 3, 3–6, 6–12, 12–18 e +18 meses;\n• trocar a filial de um técnico (ex.: “trocar a filial do técnico Anderson”);
+• agendar Visita 150h, Campanha de campo ou atendimento, perguntando máquina, técnico e data (ex.: “agendar visita 150h”);
+• mostrar o que um técnico pode aproveitar na rota: campanhas e 150h pendentes nas cidades da agenda dele (ex.: “o que o Anderson pode aproveitar na rota?”);
+• resumir pendências de 150h e campanhas por filial (ex.: “pendências de Marabá”);
+• abrir Agenda, Retenção, mapa, Follow-up, Histórico e Dashboard;\n• repetir o tutorial quando você pedir;\n• aprender com correções dos usuários. Se eu interpretar algo errado, diga “não, o correto é...” ou “corrigindo: ...”. Eu registro a correção para melhorar pedidos semelhantes.\n\nQuando eu sugerir clientes pela rota, eu não trato isso como oportunidade já aberta: são clientes potenciais encontrados pela Agenda + Retenção. E não afirmo distância ou tempo sem um cálculo real de rota.`,
     actions: [
       { label: 'Abrir Agenda', view: 'agenda' },
       { label: 'Abrir Retenção', view: 'retencao' },

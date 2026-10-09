@@ -77,6 +77,12 @@ export function Sidebar({ view, onView }: { view: ViewName; onView: (view: ViewN
 
           <div style={{ display: 'grid', gap: 10 }}>
             <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
+              <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>ArIA executa ações</strong>
+              <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
+              <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Peça à ArIA para <b>trocar a filial de um técnico</b>, <b>agendar Visita 150h ou campanha</b>, ver <b>o que o técnico pode aproveitar na rota</b> ou as <b>pendências da filial</b>. Ela pergunta o que falta com botões e só grava depois que você confirma.</p>
+            </div>
+
+            <div style={{ padding: '13px 14px', border: '1px solid #fed7aa', borderRadius: 12, background: '#fff7ed' }}>
               <strong style={{ display: 'block', marginBottom: 3, color: '#1e293b', fontSize: 13 }}>Visita 150h</strong>
               <span style={{ display: 'block', marginBottom: 7, color: '#ea580c', fontSize: 10, fontWeight: 700 }}>Novidade</span>
               <p style={{ margin: 0, color: '#64748b', fontSize: 12, lineHeight: 1.55 }}>Nova tela com as máquinas entregues (Entrega Técnica) a partir de agosto/2026 que precisam da inspeção de 150 horas. Ao agendar o motivo <b>Visita 150h</b> para o PIN, a data de programação é preenchida; ao concluir o atendimento, entra a data de execução. A linha muda de cor conforme o status: <b>Pendente de programação</b>, <b>Pendente execução</b> ou <b>Concluído</b>.</p>
