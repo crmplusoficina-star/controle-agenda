@@ -838,7 +838,7 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
       if (!tech) return { text: 'De qual técnico você quer que eu analise a região?', actions: techs.slice(0, 12).map((t) => choice(`${t.name} · ${t.branch}`, `__say|analise a região do ${t.name}${a('periodo') === 'passado' ? ' pra trás' : ''}`)), flow: null };
       remember(tech.name);
       if (lastRun) lastRun.args.tecnico = tech.name;
-      return planejarRegiao(tech, a('periodo'), Number(a('meses')) || 6);
+      return planejarRegiao(tech, a('periodo'), Number(a('meses')) || 6, a('foco'));
     }
     case 'sugestoes': return sugestoesGerais(user, userBranches, techs);
     case 'aprendizado': return learningReport();
@@ -1019,7 +1019,7 @@ async function freeDays(tech: Tech, count = 5) {
   return days.filter((d) => !busy.has(d) && new Date(`${d}T12:00:00`).getDay() !== 6).slice(0, count);
 }
 
-async function planejarRegiao(tech: Tech, periodo: string, minMonths: number): Promise<FlowReply> {
+async function planejarRegiao(tech: Tech, periodo: string, minMonths: number, foco = ''): Promise<FlowReply> {
   const today = new Date();
   const [wFrom, wTo] = weekRange();
   let from = wFrom; let to = wTo; let label = `nesta semana (${brDate(wFrom)} a ${brDate(wTo)})`;
@@ -1063,19 +1063,19 @@ async function planejarRegiao(tech: Tech, periodo: string, minMonths: number): P
   const visited = new Set(cities.flatMap((c) => Array.from(c.clients)));
 
   const regional = clients.filter((c) => cityKeys.has(fold(c.city)) && !visited.has(fold(c.client_name)));
-  const inactive = rankInactive(regional, minMonths, skip).slice(0, 8);
+  const inactive = rankInactive(regional, minMonths, skip).slice(0, foco === 'retencao' ? 12 : 8);
   const pend150 = (insp.data || []).filter((r: any) => cityKeys.has(fold(effectiveCity(r))));
   const pendCamp = (camp.data || []).filter((r: any) => cityKeys.has(fold(effectiveCity(r))));
   const free = await freeDays(tech);
 
   const parts: string[] = [];
-  parts.push(`Análise da região do ${tech.name} (${tech.branch}) ${label}:`);
+  parts.push(`${foco === 'retencao' ? 'Retenção na região' : 'Análise da região'} do ${tech.name} (${tech.branch}) ${label}:`);
   if (usedBase) parts.push(`\nNão encontrei atendimentos com cidade nesse período, então usei a base dele: ${cities[0].name}.`);
   else parts.push(`\n${periodo === 'passado' ? 'Onde ele atendeu' : 'Onde ele atendeu/vai atender'}:\n${cities.slice(0, 5).map((c) => { const days = Array.from(c.days).sort(); return `• ${c.name}: ${c.n} atendimento(s) · ${days.length > 3 ? `${brDate(days[0])} a ${brDate(days[days.length - 1])}` : days.map(brDate).join(', ')}`; }).join('\n')}`);
   if (inactive.length) {
     parts.push(`\nClientes parados há ${minMonths}+ meses nessas cidades (sem follow-up aberto):\n${inactive.map((c, i) => `${i + 1}. ${c.client_name} · ${c.city} · ${monthsSince(c.last_service_at)} meses sem atendimento · ${Number(c.service_count || 0)} OS · ${Number(c.machine_count || 0)} máq.`).join('\n')}`);
   } else parts.push(`\nNão há clientes parados há ${minMonths}+ meses nessas cidades que já não estejam em follow-up.`);
-  if (pend150.length || pendCamp.length) parts.push(`\nPendências na mesma região: ${pend150.length} Visita 150h e ${pendCamp.length} campanha(s) em aberto.`);
+  if (foco !== 'retencao' && (pend150.length || pendCamp.length)) parts.push(`\nPendências na mesma região: ${pend150.length} Visita 150h e ${pendCamp.length} campanha(s) em aberto.`);
   if (free.length) parts.push(`\nDias livres do ${tech.name}: ${free.map(brDate).join(', ')}.`);
   const top = cities[0]?.name;
   if (inactive.length && free.length) {
@@ -1090,7 +1090,7 @@ async function planejarRegiao(tech: Tech, periodo: string, minMonths: number): P
   const actions: any[] = [
     ...inactive.slice(0, 4).map((c) => ({ label: `Agendar visita: ${c.client_name.slice(0, 28)}`, choice: `__visit|${encodeURIComponent(c.client_name)}|${encodeURIComponent(c.city || '')}|${c.branch}|${tech.id}` })),
     ...(prospects.length ? [{ label: `Prospectar os ${prospects.length} no Follow-up`, operation: 'prospect', prospects }] : []),
-    ...pend150.filter((r: any) => r.pin).slice(0, 2).map((r: any) => ({ label: `Agendar 150h ${r.client_name || r.pin}`.slice(0, 40), choice: `__schedule|Visita 150h|${r.pin}|${tech.id}` })),
+    ...(foco === 'retencao' ? [] : pend150).filter((r: any) => r.pin).slice(0, 2).map((r: any) => ({ label: `Agendar 150h ${r.client_name || r.pin}`.slice(0, 40), choice: `__schedule|Visita 150h|${r.pin}|${tech.id}` })),
     ...(periodo !== 'passado' ? [{ label: 'Ver onde ele esteve (pra trás)', choice: `__say|analise a região do ${tech.name} pra trás` }] : [{ label: 'Ver a semana que vem', choice: `__say|planejar região do ${tech.name} semana que vem` }]),
   ];
   return { text: parts.join('\n'), actions, flow: null };
@@ -1143,7 +1143,7 @@ export async function refineLastIntent(message: string, user: AppUser, userBranc
     const reply = await runArIAIntent(lastRun.intent, lastRun.args, user, userBranches);
     return reply ? { ...reply, text: `Aqui está:\n\n${reply.text}` } : null;
   }
-  if (t.split(' ').length > 10) return null;
+  if (t.split(' ').length > 10 || isCityProspectIntent(message)) return null;
   const fresh = interpret(message, await nluContext(), undefined, memory);
   if (fresh && fresh.score >= 7) return null;
   const args = { ...lastRun.args };
@@ -1162,7 +1162,9 @@ export async function refineLastIntent(message: string, user: AppUser, userBranc
     const dates = extractDatesAll(message);
     const months = (t.match(/\b(\d{1,2})\s*meses?\b/) || [])[1];
     if (dates.length && /^(e |mas |nao |agora |e pra |e para |pra |para )?(hoje|amanha|ontem|depois|segunda|terca|quarta|quinta|sexta|sabado|dia|\d)/.test(t)) { args.data = dates[0]; note = `Refiz para ${brDate(dates[0])}.`; }
-    else if (months && intent === 'planejar_regiao') { args.meses = months; note = `Refiz com clientes parados há ${months}+ meses.`; }
+    else if (months && intent === 'planejar_regiao' && t.split(' ').length <= 5) { args.meses = months; note = `Refiz com clientes parados há ${months}+ meses.`; }
+    else if (/retenc|inativ|so clientes|apenas clientes|somente clientes/.test(t) && ['planejar_regiao', 'onde_tecnico', 'oportunidades_rota'].includes(intent)) { intent = 'planejar_regiao'; args.foco = 'retencao'; note = 'Refiz só com a Retenção (clientes parados).'; }
+    else if (/150|campanha|tudo|completo/.test(t) && intent === 'planejar_regiao') { args.foco = ''; note = 'Refiz com 150h e campanhas também.'; }
     else return null;
   }
   const reply = await runArIAIntent(intent, args, user, userBranches);
@@ -1218,6 +1220,23 @@ async function feedback(message: string, intent: string, signal: number) {
 function settlePending() {
   if (pending) void feedback(pending.message, pending.intent, 1);
   pending = null;
+}
+
+// "não, o correto é ...": junta o pedido original com a explicação, reinterpreta e aprende.
+export async function applyCorrection(original: string, correction: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
+  currentUser = user;
+  const explained = correction.replace(/^\s*(n[ãa]o|nao)[,.!\s]*/i, '').replace(/^(o correto (é|e)|na verdade|eu quis dizer|quis dizer|corrigindo)[.:,\s]*/i, '').replace(/^\.+\s*/, '');
+  const ctx = await nluContext();
+  const result = interpret(applyAliases(`${original} ${explained}`), ctx, undefined, memory);
+  if (!result || result.score < 4) return null;
+  if (pending && pending.intent !== result.intent) void feedback(pending.message, pending.intent, -1);
+  pending = null;
+  learnIntent(original, result.intent, ctx);
+  void feedback(original, result.intent, 2);
+  if (result.args?.tecnico) remember(result.args.tecnico);
+  const reply = await runArIAIntent(result.intent, result.args, user, userBranches);
+  if (!reply) return null;
+  return { ...reply, text: `Entendi: ${INTENT_LABELS[result.intent]}. Vou lembrar disso para pedidos parecidos (vale para toda a equipe).\n\n${reply.text}` };
 }
 
 export function markUnresolved(message: string, user: AppUser) {
@@ -1305,7 +1324,8 @@ export async function startArIAFlow(rawMessage: string, user: AppUser, userBranc
     if (!lastUndo) return { text: 'Não tenho nenhuma ação recente para desfazer nesta conversa.', flow: null };
     return { text: `Quer desfazer a última ação: ${lastUndo.label}?`, actions: CONFIRM, flow: { kind: 'undo', step: 'confirm' } };
   }
-  if (isCityProspectIntent(message)) return null;
+  // Pedido de clientes por cidade vai para a Retenção, a não ser que cite um técnico (aí é análise da região dele).
+  if (isCityProspectIntent(message) && !techInText(message, await loadTechnicians()) && !/\b(ele|ela|dele|dela)\b/.test(fold(message))) return null;
   const ctx = await nluContext();
   const result = interpret(message, ctx, undefined, memory);
   if (result?.args?.tecnico) remember(result.args.tecnico);

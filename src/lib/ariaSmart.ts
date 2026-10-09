@@ -180,7 +180,9 @@ function stripPeriodFromMessage(message: string) {
 function cityFromMessage(message: string) {
   const raw = stripPeriodFromMessage(message).replace(/[?!.,]+$/g, '').trim();
   const matches = Array.from(raw.matchAll(/\b(?:em|de)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45}?)(?=\s+(?:que|com|para|e|ha|há|mais|sem|inativ|essa|esta|na|no|da|do|onde|durante|ultimo|último)\b|$|[?!.,])/gi));
-  if (matches.length) return matches[matches.length - 1][1].trim();
+  const valid = matches.map((m) => m[1].trim()).filter((c) => !/\b(clientes?|contatos?|inativ\w*|sugest\w*|retenc\w*|reten\w*|agenda|regiao|região|tecnic\w*|atendimentos?|visitas?|follow\w*)\b/i.test(c));
+  if (valid.length) return valid[valid.length - 1];
+  if (matches.length) return '';
 
   const compact = raw.match(/\bclientes?\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,45})$/i)?.[1]?.trim();
   return compact || '';
