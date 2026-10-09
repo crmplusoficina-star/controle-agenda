@@ -4,7 +4,10 @@
 export type NluIntent =
   | 'trocar_filial_tecnico' | 'agendar_atendimento' | 'remarcar_atendimento' | 'concluir_atendimento'
   | 'excluir_atendimento' | 'adicionar_tecnico' | 'desativar_tecnico' | 'criar_followup'
-  | 'informar_cidade_maquina' | 'oportunidades_rota' | 'pendencias_filial' | 'navegar' | 'tecnicos_ociosos';
+  | 'informar_cidade_maquina' | 'oportunidades_rota' | 'pendencias_filial' | 'navegar' | 'tecnicos_ociosos'
+  | 'agenda_dia' | 'onde_tecnico' | 'carga_semana' | 'faturamento' | 'pendentes_faturamento' | 'faturar_atendimento'
+  | 'historico_maquina' | 'registrar_horimetro' | 'contato_cliente' | 'salvar_contato' | 'atendimentos_incompletos'
+  | 'pendencias_atrasadas' | 'resumo_semana' | 'folga_ferias' | 'realocar_dia' | 'adicionar_observacao' | 'ajuda';
 
 export type NluResult = { intent: NluIntent; score: number; args: Record<string, string> };
 export type NluContext = { technicians: { name: string; branch: string }[]; branches: string[] };
@@ -23,6 +26,23 @@ export const INTENT_LABELS: Record<NluIntent, string> = {
   pendencias_filial: 'Pendências 150h/campanhas',
   navegar: 'Abrir uma tela',
   tecnicos_ociosos: 'Técnicos sem atendimento',
+  agenda_dia: 'Agenda do dia',
+  onde_tecnico: 'Onde está o técnico',
+  carga_semana: 'Carga da semana',
+  faturamento: 'Previsão de faturamento',
+  pendentes_faturamento: 'Pendentes de faturamento',
+  faturar_atendimento: 'Marcar como faturado',
+  historico_maquina: 'Histórico da máquina',
+  registrar_horimetro: 'Registrar horímetro',
+  contato_cliente: 'Contato do cliente',
+  salvar_contato: 'Salvar telefone do cliente',
+  atendimentos_incompletos: 'Atendimentos incompletos',
+  pendencias_atrasadas: '150h/campanhas atrasadas',
+  resumo_semana: 'Resumo da semana',
+  folga_ferias: 'Folga ou férias',
+  realocar_dia: 'Técnico faltou (passar agenda)',
+  adicionar_observacao: 'Anotar no atendimento',
+  ajuda: 'O que a ArIA faz',
 };
 
 const STOP = new Set(['o', 'a', 'os', 'as', 'de', 'do', 'da', 'dos', 'das', 'para', 'pra', 'pro', 'em', 'no', 'na', 'e', 'um', 'uma', 'que', 'com', 'por', 'me', 'eu', 'voce', 'favor', 'gostaria', 'quero', 'queria', 'preciso', 'pode', 'consegue', 'ai', 'ali', 'ja', 'hoje', 'ele', 'ela', 'dele', 'dela', 'esse', 'essa', 'este', 'esta', 'tecnico', 'tecnica', 'filial', 'atendimento', 'agendamento', 'visita', 'cliente']);
@@ -175,8 +195,25 @@ const RULES: Rule[] = [
   { intent: 'criar_followup', strong: ['followup', 'tratativa', 'prospect'], weak: ['abr', 'cri', 'nov', 'registr', 'lig', 'retorn', 'lembr', 'cobr', 'acompanh'], objects: ['retorno', 'contato', 'ligar', 'oportunidade', 'prospeccao'], bonus: (_s, t) => (QUESTION.test(t) ? -6 : 0) },
   { intent: 'informar_cidade_maquina', strong: ['esta em', 'fica em', 'localizad', 'trabalhando em', 'rodando em', 'operando em'], weak: ['cidade'], objects: ['maquina', 'equipamento', 'pin', 'serie'], bonus: (s) => (s.pin ? 3 : -3) },
   { intent: 'oportunidades_rota', strong: ['aproveit'], weak: ['oportunidad', 'pendenc', 'encaix', 'pass'], objects: ['rota', 'viagem', 'regiao', 'caminho', 'semana', 'passando'], bonus: (s) => (s.tech ? 2 : -2) },
-  { intent: 'pendencias_filial', strong: ['pendenc', 'pendente', 'falt', 'resumo', 'situacao'], weak: ['quant', 'status', 'aberto'], objects: ['150', '150h', 'campanha', 'campanhas', 'inspecao', 'filial', 'programar'], bonus: (s) => (s.tech ? -2 : 0) },
+  { intent: 'pendencias_filial', strong: ['pendenc', 'pendente', 'falt', 'resumo', 'situacao'], weak: ['quant', 'status', 'aberto'], objects: ['150', '150h', 'campanha', 'campanhas', 'inspecao', 'filial', 'programar'], bonus: (s, t) => (s.tech ? -2 : 0) - (/fatur/.test(t) ? 6 : 0) - (/resumo/.test(t) && !/150|campanha|inspecao/.test(t) ? 4 : 0) },
   { intent: 'tecnicos_ociosos', strong: ['ocios', 'disponive', 'livre', 'sem agenda', 'sem atendimento', 'sem servico', 'parado', 'desocupad', 'vago', 'folgad'], weak: ['quem', 'quais'], objects: ['tecnico', 'tecnicos', 'equipe', 'pessoal', 'turma'], bonus: (s, t) => (/\bclientes?\b/.test(t) ? -6 : 0) + (/tecnic|equipe|pessoal|turma/.test(t) ? 2 : -4) },
+  { intent: 'agenda_dia', strong: ['agenda de hoje', 'agenda de amanha', 'agenda do dia', 'agenda da semana', 'agenda de segunda', 'agenda de terca', 'agenda de quarta', 'agenda de quinta', 'agenda de sexta', 'agenda de sabado', 'programacao do dia', 'programacao de hoje', 'programacao de amanha', 'o que tem hoje', 'o que tem amanha', 'o que temos', 'como esta a agenda', 'como ta a agenda', 'como fica a agenda'], weak: ['agenda', 'programacao'], objects: ['hoje', 'amanha', 'dia', 'filial'], bonus: (s) => (s.tech ? -5 : 0) },
+  { intent: 'onde_tecnico', strong: ['onde esta', 'onde ta', 'onde fica', 'cade', 'aonde', 'onde vai estar', 'onde vai', 'esta onde', 'ta onde', 'o que o', 'o que a'], objects: ['hoje', 'amanha', 'agora'], bonus: (s, t) => (s.tech ? 3 : -6) - (/tem|fazendo|vai fazer/.test(t) ? 0 : 0) },
+  { intent: 'carga_semana', strong: ['carga', 'ocupacao', 'carregad', 'sobrecarreg', 'distribuicao', 'quantos atendimentos cada', 'mais atendimento', 'menos atendimento', 'produtividade'], objects: ['tecnico', 'tecnicos', 'equipe', 'semana'] },
+  { intent: 'faturamento', strong: ['faturamento', 'previsao de fatur', 'quanto vamos fatur', 'quanto vai fatur', 'quanto fatur', 'quanto da', 'receita', 'valor previsto', 'quanto ja faturamos'], objects: ['semana', 'mes', 'hoje', 'filial'], bonus: (_s, t) => (/marca|marcar|coloca|ja foi faturad|foi faturad/.test(t) ? -6 : 0) },
+  { intent: 'pendentes_faturamento', strong: ['pendente de faturamento', 'pendentes de faturamento', 'falta faturar', 'faltam faturar', 'nao faturad', 'aguardando faturamento', 'a faturar', 'sem faturar', 'para faturar'], bonus: (_s, t) => (/marca|marcar|coloca/.test(t) ? -6 : 0) },
+  { intent: 'faturar_atendimento', strong: ['marca como faturado', 'marcar como faturado', 'coloca como faturado', 'ja foi faturad', 'foi faturad', 'fatura o atendimento', 'faturei', 'faturado o'], weak: ['faturad', 'fatur'], objects: ['atendimento', 'visita', 'os'], bonus: (_s, t) => (QUESTION.test(t) ? -6 : 0) },
+  { intent: 'historico_maquina', strong: ['historico', 'ultima visita', 'ultimo atendimento', 'o que foi feito', 'ultimas os', 'ultimo horimetro', 'horimetro da', 'horimetro do', 'ficha da maquina'], objects: ['maquina', 'pin', 'serie', 'equipamento'], bonus: (s, t) => (s.pin ? 4 : -6) - (/\d{3,6}\s*(h|hs|horas)\b/.test(t) ? 6 : 0) },
+  { intent: 'registrar_horimetro', strong: ['horimetro', 'horas'], weak: ['registr', 'atualiz', 'anot', 'lanc', 'esta com', 'ta com', 'marcando'], objects: ['maquina', 'pin', 'equipamento'], bonus: (s, t) => (s.pin ? 2 : -3) + (/\b\d{2,6}\s*(h|hs|horas)?\b/.test(t.replace(/\b(?=[a-z0-9]*\d{4})[a-z]{2,5}[a-z0-9]{8,16}\b/g, '')) ? 3 : -6) },
+  { intent: 'contato_cliente', strong: ['telefone', 'contato do', 'contato da', 'whatsapp', 'email do', 'email da', 'numero do cliente', 'numero da', 'falar com', 'quem e o contato'], objects: ['cliente'], bonus: (_s, t) => (/\d{8,}|\(\d{2}\)/.test(t.replace(/\s|-/g, '')) ? -5 : 0) + (/followup|tratativa/.test(t) ? -5 : 0) },
+  { intent: 'salvar_contato', strong: ['telefone', 'whatsapp', 'contato', 'celular', 'numero'], weak: ['salv', 'anot', 'registr', 'guard', 'cadastr'], bonus: (_s, t) => (/\d{8,}/.test(t.replace(/[\s()-]/g, '')) ? 5 : -6) },
+  { intent: 'atendimentos_incompletos', strong: ['sem cidade', 'sem cliente', 'sem serie', 'sem pin', 'incomplet', 'faltando informacao', 'faltando dados', 'cadastro incompleto', 'localizacao pendente', 'cidade nao informada', 'sem localizacao', 'mal preenchid'], objects: ['atendimento', 'agenda'] },
+  { intent: 'pendencias_atrasadas', strong: ['atrasad', 'vencid', 'vencendo', 'prazo', 'urgente', 'urgentes', 'estourad', 'obrigatori'], objects: ['150', '150h', 'campanha', 'campanhas', 'inspecao', 'mandatory'], bonus: (_s, t) => (/150|campanha|inspecao|mandatory|obrigatori/.test(t) ? 2 : -6) },
+  { intent: 'resumo_semana', strong: ['resumo da semana', 'resumo de hoje', 'resumo do dia', 'resumo geral', 'como foi a semana', 'como esta a semana', 'balanco', 'panorama', 'visao geral', 'relatorio', 'indicadores', 'numeros da semana'] },
+  { intent: 'folga_ferias', strong: ['folga', 'ferias', 'atestado', 'licenca', 'day off', 'afastad', 'abonar', 'dispensad'], weak: ['dar', 'lanc', 'coloc', 'registr', 'marc', 'bot'], bonus: (s, t) => (s.tech ? 2 : 0) - (QUESTION.test(t) ? 5 : 0) },
+  { intent: 'realocar_dia', strong: ['faltou', 'nao veio', 'nao vai vir', 'nao vem', 'doente', 'passa os atendimentos', 'passar os atendimentos', 'todos os atendimentos', 'agenda inteira', 'agenda toda', 'cobrir', 'substitu', 'no lugar do', 'no lugar da'], bonus: (_s, t) => 4 - (/folga|ferias/.test(t) ? 7 : 0) },
+  { intent: 'adicionar_observacao', strong: ['observacao', 'anota no', 'anotar no', 'escreve no', 'coloca na descricao', 'adiciona na descricao', 'nota no', 'lembrete no'], objects: ['atendimento', 'visita', 'agendamento'] },
+  { intent: 'ajuda', strong: ['o que voce faz', 'o que voce consegue', 'o que vc faz', 'como voce pode ajudar', 'ajuda', 'comandos', 'exemplos', 'me ensina', 'como usar', 'suas funcoes', 'o que da pra fazer', 'o que posso pedir'] },
   { intent: 'navegar', strong: ['ir para', 'vai para', 'me leva', 'leva para'], weak: ['abr', 'mostr', 'acess', 'entra'], objects: ['tela', 'agenda', 'retencao', 'mapa', 'followup', 'dashboard', 'painel', 'campanhas', '150', 'usuarios'] },
 ];
 
@@ -237,6 +274,7 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     const object = rule.objects ? hasStem(text, rule.objects, true) : false;
     if (!strong && !weak && !object) continue;
     if (rule.intent === 'remarcar_atendimento' && !strong && !weak) continue;
+    if (rule.intent === 'pendencias_atrasadas' && !strong) continue;
     let score = (strong ? 5 : weak ? 2 : 0) + (object ? 2 : 0) + (rule.bonus ? rule.bonus(slots, text) : 0);
     if (rule.intent === 'agendar_atendimento' && /^ (agenda|preciso de|precisa de|quero) (uma|um|o|a|para|com|visita|atendimento)\b/.test(text)) score += 5;
     if (rule.intent === 'agendar_atendimento' && /\bmarca(r)? como\b/.test(text)) score -= 6;
@@ -281,6 +319,37 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     case 'pendencias_filial': best.args = { filial: matchBranch(text, ctx.branches) }; break;
     case 'navegar': best.args = { tela: text }; break;
     case 'tecnicos_ociosos': best.args = { data: d1 || '', filial: matchBranch(text, ctx.branches) }; break;
+    case 'agenda_dia': best.args = { data: d1 || '', filial: matchBranch(text, ctx.branches), semana: /semana/.test(text) ? '1' : '' }; break;
+    case 'onde_tecnico': best.args = { tecnico: slots.tech, data: d1 || '' }; break;
+    case 'carga_semana':
+    case 'resumo_semana':
+    case 'atendimentos_incompletos':
+    case 'pendencias_atrasadas':
+    case 'pendentes_faturamento': best.args = { filial: matchBranch(text, ctx.branches), tecnico: slots.tech }; break;
+    case 'faturamento': best.args = { filial: matchBranch(text, ctx.branches), periodo: /\bmes\b/.test(text) ? 'mes' : /\bhoje\b/.test(text) ? 'hoje' : 'semana' }; break;
+    case 'faturar_atendimento': best.args = { tecnico: slots.tech, cliente_ou_pin: slots.pin || tail, data: d1 || '' }; break;
+    case 'historico_maquina': best.args = { pin: slots.pin }; break;
+    case 'registrar_horimetro': {
+      const cleaned = raw.replace(/\b(?=[A-Z0-9]*\d{4})[A-Z]{2,5}[A-Z0-9]{8,16}\b/gi, ' ');
+      const hours = (cleaned.match(/(\d{1,3}(?:[.\s]\d{3})+|\d{2,6})(?:[,.]\d)?\s*(?:h|hs|horas)?/i) || [])[1] || '';
+      best.args = { pin: slots.pin, horas: hours.replace(/[.\s]/g, '') };
+      break;
+    }
+    case 'contato_cliente': best.args = { cliente: tail || tailAfter(raw, /(?:telefone|contato|whatsapp|e-?mail|n[úu]mero)\s+(?:d[aoe]s?\s+)?(?:cliente\s+)?([^,.;!?]{3,60})/i) }; break;
+    case 'salvar_contato': {
+      const phone = (raw.match(/(\(?\d{2}\)?\s*9?\s*\d{4}[\s-]?\d{4})/) || [])[1] || '';
+      const who = tailAfter(raw, /(?:telefone|contato|whatsapp|celular|n[úu]mero)\s+(?:d[aoe]s?\s+)?(?:cliente\s+)?([A-Za-zÀ-ú][^0-9,.;!?]{2,60}?)\s+(?:[ée]|eh|=|:)/i) || tail;
+      best.args = { cliente: who.trim(), telefone: phone.trim() };
+      break;
+    }
+    case 'folga_ferias': best.args = { tecnico: slots.tech, tipo: /ferias/.test(text) ? 'Férias' : 'Folga', inicio: d1 || '', fim: d2 || '' }; break;
+    case 'realocar_dia': {
+      const both = ctx.technicians.map((t) => ({ t, at: text.indexOf(` ${normalize(t.name).trim().split(' ')[0]} `) })).filter((x) => x.at >= 0).sort((a, b) => a.at - b.at);
+      best.args = { tecnico: both[0]?.t.name || slots.tech, novo_tecnico: both[1]?.t.name || '', data: d1 || '' };
+      break;
+    }
+    case 'adicionar_observacao': best.args = { tecnico: slots.tech, cliente_ou_pin: slots.pin, data: d1 || '', texto: (raw.match(/[:\-–]\s*(.+)$/) || [])[1] || '' }; break;
+    case 'ajuda': best.args = {}; break;
   }
   return best;
 }
