@@ -56,9 +56,20 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null
   return Promise.race([promise, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
 }
 
-async function geocode(rawCity: string, branch: string): Promise<Point | null> {
+async function geocodeViaApp(city: string, branch: string, clientName?: string): Promise<Point | null> {
+  const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : '00000000-0000-4000-8000-000000000001';
+  const call = supabase.functions.invoke('retention-map-context', {
+    body: { clients: [], technician_id: null, appointments: [{ id, branch, appointment_date: new Date().toISOString().slice(0, 10), technician_id: id, technician_name: null, client_name: clientName || null, equipment_serial: null, service_city: city, service_reason: null, description: null }] },
+  });
+  const result: any = await withTimeout(call, 9000);
+  const point = (result?.data?.points || []).find((p: any) => p.kind === 'appointment' && p.id === id && !p.location_uncertain);
+  return point && Number.isFinite(point.lat) && Number.isFinite(point.lng) ? { lat: Number(point.lat), lng: Number(point.lng), label: city } : null;
+}
+
+async function geocode(rawCity: string, branch: string, clientName?: string): Promise<Point | null> {
   const branchKey = fold(branch);
-  if (fold(rawCity) === branchKey && BRANCHES[branchKey]) return { ...BRANCHES[branchKey], label: rawCity.trim() };
+  const asBranch = BRANCHES[fold(parseCityState(rawCity).city)];
+  if (asBranch) return { ...asBranch, label: rawCity.trim() };
   const parsed = parseCityState(rawCity);
   if (!parsed.city) return null;
   const state = parsed.state || BRANCH_STATE[branchKey] || '';
@@ -70,16 +81,20 @@ async function geocode(rawCity: string, branch: string): Promise<Point | null> {
   url.searchParams.set('count', '20');
   url.searchParams.set('language', 'pt');
   url.searchParams.set('countryCode', 'BR');
-  const response = await withTimeout(fetch(url), 5000);
-  if (!response?.ok) return null;
-  const results: any[] = (await response.json())?.results || [];
+  const response = await withTimeout(fetch(url).catch(() => null), 5000);
+  const results: any[] = response?.ok ? ((await response.json())?.results || []) : [];
   const sameName = results.filter((r) => fold(r.name) === fold(parsed.city));
   const desiredState = fold(STATE_NAMES[state] || state);
   // Mesmo nome no estado da filial; se não houver, o mais próximo da filial.
   let chosen = sameName.find((r) => fold(r.admin1) === desiredState);
   const base = BRANCHES[branchKey];
   if (!chosen && sameName.length && base) chosen = sameName.sort((a, b) => Math.hypot(a.latitude - base.lat, a.longitude - base.lng) - Math.hypot(b.latitude - base.lat, b.longitude - base.lng))[0];
-  if (!chosen) return null;
+  if (!chosen) {
+    // Reserva: o serviço do mapa do app localiza a cidade na nuvem (não depende do navegador alcançar o geocodificador).
+    const viaApp = await geocodeViaApp(parsed.city, branch, clientName);
+    if (viaApp) remember(key, viaApp);
+    return viaApp;
+  }
   const point = { lat: Number(chosen.latitude), lng: Number(chosen.longitude), label: parsed.city };
   remember(key, point);
   return point;
@@ -126,14 +141,14 @@ const branchReturn = (reason?: string | null, description?: string | null) => { 
 
 export async function estimateRoute(input: {
   id?: string; technician_id: string; appointment_date: string; branch: string; service_city: string;
-  service_reason?: string; description?: string; created_at?: string | null;
+  service_reason?: string; description?: string; created_at?: string | null; client_name?: string;
 }): Promise<QuickRoute | null> {
   if (!input.technician_id || !input.appointment_date || ignored(input.service_reason)) return null;
   const isReturn = branchReturn(input.service_reason, input.description);
   if (!input.service_city.trim() && !isReturn) return null;
   const base = BRANCHES[fold(input.branch)];
 
-  const destination = isReturn ? base : await geocode(input.service_city, input.branch);
+  const destination = isReturn ? base : await geocode(input.service_city, input.branch, input.client_name);
   if (!destination) return null;
 
   // Atendimento anterior do técnico na mesma semana (mesma regra do worker).
