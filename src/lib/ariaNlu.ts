@@ -4,7 +4,7 @@
 export type NluIntent =
   | 'trocar_filial_tecnico' | 'agendar_atendimento' | 'remarcar_atendimento' | 'concluir_atendimento'
   | 'excluir_atendimento' | 'adicionar_tecnico' | 'desativar_tecnico' | 'criar_followup'
-  | 'informar_cidade_maquina' | 'oportunidades_rota' | 'pendencias_filial' | 'navegar';
+  | 'informar_cidade_maquina' | 'oportunidades_rota' | 'pendencias_filial' | 'navegar' | 'tecnicos_ociosos';
 
 export type NluResult = { intent: NluIntent; score: number; args: Record<string, string> };
 export type NluContext = { technicians: { name: string; branch: string }[]; branches: string[] };
@@ -22,6 +22,7 @@ export const INTENT_LABELS: Record<NluIntent, string> = {
   oportunidades_rota: 'Oportunidades na rota',
   pendencias_filial: 'Pendências 150h/campanhas',
   navegar: 'Abrir uma tela',
+  tecnicos_ociosos: 'Técnicos sem atendimento',
 };
 
 const STOP = new Set(['o', 'a', 'os', 'as', 'de', 'do', 'da', 'dos', 'das', 'para', 'pra', 'pro', 'em', 'no', 'na', 'e', 'um', 'uma', 'que', 'com', 'por', 'me', 'eu', 'voce', 'favor', 'gostaria', 'quero', 'queria', 'preciso', 'pode', 'consegue', 'ai', 'ali', 'ja', 'hoje', 'ele', 'ela', 'dele', 'dela', 'esse', 'essa', 'este', 'esta', 'tecnico', 'tecnica', 'filial', 'atendimento', 'agendamento', 'visita', 'cliente']);
@@ -175,6 +176,7 @@ const RULES: Rule[] = [
   { intent: 'informar_cidade_maquina', strong: ['esta em', 'fica em', 'localizad', 'trabalhando em', 'rodando em', 'operando em'], weak: ['cidade'], objects: ['maquina', 'equipamento', 'pin', 'serie'], bonus: (s) => (s.pin ? 3 : -3) },
   { intent: 'oportunidades_rota', strong: ['aproveit'], weak: ['oportunidad', 'pendenc', 'encaix', 'pass'], objects: ['rota', 'viagem', 'regiao', 'caminho', 'semana', 'passando'], bonus: (s) => (s.tech ? 2 : -2) },
   { intent: 'pendencias_filial', strong: ['pendenc', 'pendente', 'falt', 'resumo', 'situacao'], weak: ['quant', 'status', 'aberto'], objects: ['150', '150h', 'campanha', 'campanhas', 'inspecao', 'filial', 'programar'], bonus: (s) => (s.tech ? -2 : 0) },
+  { intent: 'tecnicos_ociosos', strong: ['ocios', 'disponive', 'livre', 'sem agenda', 'sem atendimento', 'sem servico', 'parado', 'desocupad', 'vago', 'folgad'], weak: ['quem', 'quais'], objects: ['tecnico', 'tecnicos', 'equipe', 'pessoal', 'turma'], bonus: (s, t) => (/\bclientes?\b/.test(t) ? -6 : 0) + (/tecnic|equipe|pessoal|turma/.test(t) ? 2 : -4) },
   { intent: 'navegar', strong: ['ir para', 'vai para', 'me leva', 'leva para'], weak: ['abr', 'mostr', 'acess', 'entra'], objects: ['tela', 'agenda', 'retencao', 'mapa', 'followup', 'dashboard', 'painel', 'campanhas', '150', 'usuarios'] },
 ];
 
@@ -244,6 +246,8 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     if (rule.intent === 'remarcar_atendimento' && newOne) score -= 4;
     if (rule.intent === 'navegar' && !/\b(abr|ir para|vai para|mostr|acess|entra|leva)/.test(text)) score -= 3;
     if (rule.intent === 'navegar' && slots.tech) score -= 5;
+    const aboutClients = /\bclientes?\b/.test(text) && !/\btecnic/.test(text) && !slots.tech;
+    if (aboutClients && ['desativar_tecnico', 'adicionar_tecnico', 'trocar_filial_tecnico', 'tecnicos_ociosos'].includes(rule.intent)) score -= 8;
     if (score > (best?.score ?? 0)) best = { intent: rule.intent, score, args: {} };
   }
 
@@ -276,6 +280,7 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     case 'oportunidades_rota': best.args = { tecnico: slots.tech }; break;
     case 'pendencias_filial': best.args = { filial: matchBranch(text, ctx.branches) }; break;
     case 'navegar': best.args = { tela: text }; break;
+    case 'tecnicos_ociosos': best.args = { data: d1 || '', filial: matchBranch(text, ctx.branches) }; break;
   }
   return best;
 }

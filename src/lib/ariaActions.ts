@@ -3,6 +3,7 @@ import type { AppUser } from '../session';
 import type { ArIAAction, ArIAReply } from './ariaBrain';
 import { effectiveCity } from '../features/ServiceProgramsView';
 import { INTENT_LABELS, interpret, learnIntent, type NluIntent } from './ariaNlu';
+import { isCityProspectIntent } from './ariaSmart';
 
 type Tech = { id: string; name: string; branch: string; active: boolean };
 type Machine = { serial: string; client: string; city: string; branch: string; label: string };
@@ -462,6 +463,23 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
       const scope = named ? [named] : userBranches.length ? userBranches : branches;
       return branchPendencies(scope, named ? `de ${named}` : 'das suas filiais');
     }
+    case 'tecnicos_ociosos': {
+      const day = date(a('data')) || iso(new Date());
+      const branch = findBranch(a('filial'));
+      const scope = branch ? [branch] : userBranches;
+      const pool = techs.filter((t) => !scope.length || scope.includes(t.branch));
+      const { data } = await supabase.from('appointments').select('technician_id,service_reason').eq('appointment_date', day).in('technician_id', pool.map((t) => t.id));
+      const busy = new Set((data || []).filter((r: any) => !['Sem agenda'].includes(r.service_reason || '')).map((r: any) => r.technician_id));
+      const off = new Set((data || []).filter((r: any) => ['Folga', 'Férias'].includes(r.service_reason || '')).map((r: any) => r.technician_id));
+      const idle = pool.filter((t) => !busy.has(t.id));
+      const label = `${brDate(day)}${branch ? ` em ${branch}` : ''}`;
+      if (!idle.length) return { text: `Todos os técnicos${branch ? ` de ${branch}` : ' das suas filiais'} têm atendimento em ${brDate(day)}.`, flow: null };
+      return {
+        text: `Técnicos sem atendimento agendado ${label} (${idle.length} de ${pool.length}):\n\n${idle.map((t, i) => `${i + 1}. ${t.name} · ${t.branch}`).join('\n')}${off.size ? `\n\n(${off.size} técnico(s) estão de folga ou férias e não entram na lista.)` : ''}\n\nQuer agendar algum deles?`,
+        actions: idle.slice(0, 6).map((t) => ({ label: `Agendar ${t.name}`, choice: `__schedule|Revisão OS cliente||${t.id}` })),
+        flow: null,
+      };
+    }
     case 'navegar': {
       const tela = fold(a('tela'));
       const map: [RegExp, ArIAAction][] = [
@@ -515,6 +533,7 @@ export async function startArIAFlow(message: string, user: AppUser, userBranches
     if (!lastUndo) return { text: 'Não tenho nenhuma ação recente para desfazer nesta conversa.', flow: null };
     return { text: `Quer desfazer a última ação: ${lastUndo.label}?`, actions: CONFIRM, flow: { kind: 'undo', step: 'confirm' } };
   }
+  if (isCityProspectIntent(message)) return null;
   const ctx = await nluContext();
   const result = interpret(message, ctx, undefined, memory);
   if (result?.args?.tecnico) remember(result.args.tecnico);
@@ -534,6 +553,12 @@ export function intentMenu(message: string): FlowReply | null {
     };
   }
   return null;
+}
+
+// Resposta que não é uma opção válida: se parecer um pedido novo (3+ palavras), abandona o fluxo.
+function retry(text: string, flow: ArIAFlow, input: string): FlowReply | null {
+  if (input.trim().split(/\s+/).length >= 3) return null;
+  return { text, flow };
 }
 
 export async function continueArIAFlow(flow: ArIAFlow | null, input: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
@@ -577,12 +602,12 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
   if (flow.kind === 'appt') {
     if (flow.step === 'pick') {
       const appt = flow.candidates?.find((c) => c.id === input);
-      if (!appt) return { text: 'Escolha um dos atendimentos acima.', flow };
+      if (!appt) return retry('Escolha um dos atendimentos acima.', flow, input);
       return askAppt({ ...flow, appt });
     }
     if (flow.step === 'date') {
       const newDate = parseDate(input);
-      if (!newDate) return { text: 'Não entendi a data. Escolha uma opção ou digite como 15/10 ou "sexta".', flow };
+      if (!newDate) return retry('Não entendi a data. Escolha uma opção ou digite como 15/10 ou "sexta".', flow, input);
       return askAppt({ ...flow, newDate });
     }
     return yes ? runAppt(flow) : null;
@@ -591,7 +616,7 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     if (flow.step === 'name') return askTechAdd({ ...flow, name: input.trim() });
     if (flow.step === 'branch') {
       const branch = (await loadActiveBranches()).find((b) => fold(b) === text || text.includes(fold(b)));
-      if (!branch) return { text: 'Não reconheci essa filial. Escolha uma das opções.', flow };
+      if (!branch) return retry('Não reconheci essa filial. Escolha uma das opções.', flow, input);
       return askTechAdd({ ...flow, branch });
     }
     return yes ? runTechAdd(flow) : null;
@@ -600,7 +625,7 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     if (flow.step === 'tech') {
       const techs = await loadTechnicians();
       const tech = techs.find((t) => t.id === input) || techInText(input, techs);
-      if (!tech) return { text: 'Não encontrei esse técnico.', flow };
+      if (!tech) return retry('Não encontrei esse técnico.', flow, input);
       return askTechOff({ ...flow, tech });
     }
     return yes ? runTechOff(flow) : null;
@@ -626,13 +651,13 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     if (flow.step === 'tech') {
       const techs = await loadTechnicians();
       const tech = techs.find((t) => t.id === input) || techInText(input, techs);
-      if (!tech) return { text: 'Não encontrei esse técnico. Escolha uma das opções acima ou digite o nome.', flow };
+      if (!tech) return retry('Não encontrei esse técnico. Escolha uma das opções acima ou digite o nome.', flow, input);
       return askTechBranch({ ...flow, tech });
     }
     if (flow.step === 'branch') {
       const branches = await loadActiveBranches();
       const toBranch = branches.find((b) => fold(b) === text) || branches.find((b) => text.includes(fold(b)));
-      if (!toBranch) return { text: 'Não reconheci essa filial. Escolha uma das opções acima.', flow };
+      if (!toBranch) return retry('Não reconheci essa filial. Escolha uma das opções acima.', flow, input);
       return askTechBranch({ ...flow, toBranch });
     }
     if (input === '__confirm' || /^(sim|confirm|pode|ok)/.test(text)) return runTechBranch(flow);
@@ -642,18 +667,18 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
   if (flow.step === 'machine') {
     const serial = serialInText(input) || input.toUpperCase().trim();
     const machine = await machineBySerial(serial);
-    if (!machine) return { text: `Não encontrei a máquina ${serial} no G4. Confira o PIN ou escolha uma das opções.`, flow };
+    if (!machine) return retry(`Não encontrei a máquina ${serial} no G4. Confira o PIN ou escolha uma das opções.`, flow, input);
     return askSchedule({ ...flow, machine }, user, userBranches);
   }
   if (flow.step === 'tech') {
     const techs = await loadTechnicians();
     const tech = techs.find((t) => t.id === input) || techInText(input, techs);
-    if (!tech) return { text: 'Não encontrei esse técnico. Escolha uma das opções ou digite o nome.', flow };
+    if (!tech) return retry('Não encontrei esse técnico. Escolha uma das opções ou digite o nome.', flow, input);
     return askSchedule({ ...flow, tech }, user, userBranches);
   }
   if (flow.step === 'date') {
     const date = parseDate(input);
-    if (!date) return { text: 'Não entendi a data. Escolha uma opção ou digite como 15/10 ou "sexta".', flow };
+    if (!date) return retry('Não entendi a data. Escolha uma opção ou digite como 15/10 ou "sexta".', flow, input);
     return askSchedule({ ...flow, date }, user, userBranches);
   }
   if (input === '__confirm' || /^(sim|confirm|pode|ok)/.test(text)) return runSchedule(flow);
