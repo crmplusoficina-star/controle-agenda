@@ -8,7 +8,7 @@ export type NluIntent =
   | 'agenda_dia' | 'onde_tecnico' | 'carga_semana' | 'faturamento' | 'pendentes_faturamento' | 'faturar_atendimento'
   | 'historico_maquina' | 'registrar_horimetro' | 'contato_cliente' | 'salvar_contato' | 'atendimentos_incompletos'
   | 'pendencias_atrasadas' | 'resumo_semana' | 'folga_ferias' | 'realocar_dia' | 'adicionar_observacao' | 'ajuda'
-  | 'planejar_regiao' | 'sugestoes';
+  | 'planejar_regiao' | 'sugestoes' | 'aprendizado';
 
 export type NluResult = { intent: NluIntent; score: number; args: Record<string, string> };
 export type NluContext = { technicians: { name: string; branch: string }[]; branches: string[] };
@@ -46,6 +46,7 @@ export const INTENT_LABELS: Record<NluIntent, string> = {
   ajuda: 'O que a ArIA faz',
   planejar_regiao: 'Analisar região do técnico',
   sugestoes: 'Sugestões do dia',
+  aprendizado: 'O que a ArIA aprendeu',
 };
 
 const STOP = new Set(['o', 'a', 'os', 'as', 'de', 'do', 'da', 'dos', 'das', 'para', 'pra', 'pro', 'em', 'no', 'na', 'e', 'um', 'uma', 'que', 'com', 'por', 'me', 'eu', 'voce', 'favor', 'gostaria', 'quero', 'queria', 'preciso', 'pode', 'consegue', 'ai', 'ali', 'ja', 'hoje', 'ele', 'ela', 'dele', 'dela', 'esse', 'essa', 'este', 'esta', 'tecnico', 'tecnica', 'filial', 'atendimento', 'agendamento', 'visita', 'cliente']);
@@ -218,6 +219,7 @@ const RULES: Rule[] = [
   { intent: 'adicionar_observacao', strong: ['observacao', 'anota no', 'anotar no', 'escreve no', 'coloca na descricao', 'adiciona na descricao', 'nota no', 'lembrete no'], objects: ['atendimento', 'visita', 'agendamento'] },
   { intent: 'planejar_regiao', strong: ['regiao', 'planej', 'analis', 'analiz', 'onde ele tava', 'onde ele estava', 'onde ela estava', 'onde esteve', 'por onde', 'onde passou', 'onde atendeu', 'onde ele atendeu', 'inteligente', 'clientes ali', 'clientes por perto', 'clientes perto', 'redondeza', 'arredores', 'proximidade', 'sugest', 'sugir', 'suger', 'roteiro'], objects: ['visita', 'visitas', 'clientes', 'semana', 'rota'], bonus: (s) => (s.tech ? 4 : -5) },
   { intent: 'sugestoes', strong: ['sugest', 'sugir', 'suger', 'me indica', 'prioriz', 'recomend', 'dica', 'ideia', 'o que eu faco', 'o que fazer', 'por onde comeco', 'prioridade', 'oportunidades do dia', 'o que priorizar'], bonus: (s, t) => (s.tech ? -6 : 0) - (/\b\d{1,2}\s+clientes?\b/.test(t) || (/\bclientes?\b/.test(t) && /\bem [a-z]{3,}/.test(t)) ? 6 : 0) },
+  { intent: 'aprendizado', strong: ['aprendeu', 'aprendizado', 'aprendizagem', 'te ensinaram', 'ensinaram', 'como te ensino', 'como ensinar', 'nao entendeu ainda', 'o que voce nao entende'] },
   { intent: 'ajuda', strong: ['o que voce faz', 'o que voce consegue', 'o que vc faz', 'como voce pode ajudar', 'ajuda', 'comandos', 'exemplos', 'me ensina', 'como usar', 'suas funcoes', 'o que da pra fazer', 'o que posso pedir'], bonus: (_s, t) => (t.trim().split(' ').length > 6 ? -3 : 0) },
   { intent: 'navegar', strong: ['ir para', 'vai para', 'me leva', 'leva para'], weak: ['abr', 'mostr', 'acess', 'entra'], objects: ['tela', 'agenda', 'retencao', 'mapa', 'followup', 'dashboard', 'painel', 'campanhas', '150', 'usuarios'] },
 ];
@@ -242,6 +244,45 @@ export function learnIntent(message: string, intent: NluIntent, ctx: NluContext)
   const list = loadLearned().filter((item) => item.tokens.join(' ') !== tokens.join(' '));
   list.unshift({ tokens, intent });
   try { localStorage.setItem(LEARN_KEY, JSON.stringify(list.slice(0, 200))); } catch { /* sem armazenamento */ }
+}
+
+// Memória compartilhada (vem do banco): frase -> intenção com votos de acerto/erro.
+export type SharedMemory = { tokens: string[]; intent: string; positive: number; negative: number };
+let shared: SharedMemory[] = [];
+let aliases: { kind: string; alias: string; value: string }[] = [];
+export function setSharedLearning(memory: SharedMemory[], aliasList: { kind: string; alias: string; value: string }[]) {
+  shared = memory || [];
+  aliases = aliasList || [];
+}
+export function phraseTokens(message: string, ctx: NluContext) {
+  return keyTokens(normalize(message), ctx);
+}
+
+// Troca apelidos aprendidos ("Cezinha" -> "Cezaro") antes de interpretar.
+export function applyAliases(raw: string) {
+  let out = raw;
+  for (const a of aliases) {
+    const re = new RegExp(`(^|[^\\wÀ-ú])(${a.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?=$|[^\\wÀ-ú])`, 'gi');
+    out = out.replace(re, `$1${a.value}`);
+  }
+  return out;
+}
+
+// Ajuste de pontuação pelo que os usuários já ensinaram: acertos somam, erros subtraem.
+function memoryBoost(text: string, ctx: NluContext) {
+  const tokens = keyTokens(text, ctx);
+  const boost = new Map<string, number>();
+  if (!tokens.length) return boost;
+  const local = loadLearned().map((l) => ({ tokens: l.tokens, intent: l.intent as string, positive: 3, negative: 0 }));
+  for (const item of [...shared, ...local]) {
+    if (!item.tokens?.length) continue;
+    const inter = item.tokens.filter((t) => tokens.some((w) => wordLike(w, t))).length;
+    const sim = inter / Math.max(item.tokens.length, tokens.length);
+    if (sim < 0.6) continue;
+    const net = Math.max(-4, Math.min(5, (item.positive || 0) - (item.negative || 0) * 2));
+    boost.set(item.intent, (boost.get(item.intent) || 0) + net * 2 * sim);
+  }
+  return boost;
 }
 
 function learnedIntent(text: string, ctx: NluContext): NluIntent | null {
@@ -290,6 +331,7 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
   };
 
   let best: NluResult | null = null;
+  const scored: { intent: NluIntent; score: number }[] = [];
   for (const rule of RULES) {
     const strong = hasStem(text, rule.strong);
     const weak = !strong && rule.weak ? hasStem(text, rule.weak) : false;
@@ -308,11 +350,20 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     if (rule.intent === 'navegar' && slots.tech) score -= 5;
     const aboutClients = /\bclientes?\b/.test(text) && !/\btecnic/.test(text) && !slots.tech;
     if (aboutClients && ['desativar_tecnico', 'adicionar_tecnico', 'trocar_filial_tecnico', 'tecnicos_ociosos'].includes(rule.intent)) score -= 8;
-    if (score > (best?.score ?? 0)) best = { intent: rule.intent, score, args: {} };
+    scored.push({ intent: rule.intent, score });
   }
 
+  // O que a equipe ensinou pesa na decisão (inclusive intenções sem palavra-chave).
+  const boost = memoryBoost(text, ctx);
+  for (const [intent, value] of boost) {
+    const hit = scored.find((x) => x.intent === intent);
+    if (hit) hit.score += value;
+    else if (RULES.some((r) => r.intent === intent) && value > 0) scored.push({ intent: intent as NluIntent, score: 2 + value });
+  }
+  for (const x of scored) if (x.score > (best?.score ?? 0)) best = { intent: x.intent, score: x.score, args: {} };
+
   const learned = learnedIntent(text, ctx);
-  if (learned && (!best || best.score < 6)) best = { intent: learned, score: 6, args: {} };
+  if (learned && (!best || best.score < 6) && (boost.get(learned) ?? 0) >= 0) best = { intent: learned, score: 6, args: {} };
   if (forced) best = { intent: forced, score: 10, args: {} };
   if (!best || best.score < 4) return null;
 
@@ -372,6 +423,7 @@ export function interpret(raw: string, ctx: NluContext, forced?: NluIntent, memo
     }
     case 'adicionar_observacao': best.args = { tecnico: slots.tech, cliente_ou_pin: slots.pin, data: d1 || '', texto: (raw.match(/[:\-–]\s*(.+)$/) || [])[1] || '' }; break;
     case 'ajuda':
+    case 'aprendizado':
     case 'sugestoes': best.args = {}; break;
     case 'planejar_regiao': best.args = { tecnico: slots.tech, periodo: pastWords(text) ? 'passado' : /proxima semana|semana que vem|pra frente|proximos dias|vai atender/.test(text) ? 'futuro' : '', meses: (text.match(/\b(\d{1,2})\s*meses?\b/) || [])[1] || '' }; break;
   }
