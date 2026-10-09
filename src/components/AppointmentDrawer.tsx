@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { estimateRoute, type QuickRoute } from '../lib/quickRoute';
 import type { FormEvent } from 'react';
 import { Check, Loader2, MessageCircle, Route, Sparkles, Trash2 } from 'lucide-react';
 import { Drawer } from './Drawer';
@@ -74,6 +75,8 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   const [clientContact, setClientContact] = useState('');
   const [routePreview, setRoutePreview] = useState<AppointmentRouteMetric | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
+  const [quick, setQuick] = useState<QuickRoute | null>(null);
+  const [quickBusy, setQuickBusy] = useState(false);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const contactKey = draft ? clientContactKey(draft.branch, draft.client_name) : '';
   const oppSerial = draft ? draft.equipment_serial.trim().toUpperCase() : '';
@@ -170,6 +173,31 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
     return () => { cancelled = true; };
   }, [draft?.id]);
 
+  // Estimativa imediata enquanto o usuário preenche (não espera o worker da nuvem).
+  useEffect(() => {
+    if (!draft) { setQuick(null); return; }
+    let cancelled = false;
+    setQuickBusy(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await estimateRoute({
+          id: draft.id, technician_id: draft.technician_id, appointment_date: draft.appointment_date, branch: draft.branch,
+          service_city: draft.service_city || '', service_reason: draft.service_reason, description: draft.description, created_at: (draft as any).created_at,
+        });
+        if (!cancelled) setQuick(result);
+      } catch {
+        if (!cancelled) setQuick(null);
+      } finally {
+        if (!cancelled) setQuickBusy(false);
+      }
+    }, 500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [draft?.id, draft?.technician_id, draft?.appointment_date, draft?.service_city, draft?.service_reason, draft?.branch]);
+
+  const cloudReady = Boolean(draft && routePreview?.status === 'ready' && routePreview.distance_km != null
+    && routePreview.appointment_date === draft.appointment_date && routePreview.technician_id === draft.technician_id
+    && normText(routePreview.destination_city) === normText(draft.service_city));
+
   return <Drawer open={Boolean(draft)} title={draft?.id ? 'Editar atendimento' : 'Novo atendimento'} subtitle="Somente o necessário para organizar bem a visita." onClose={onClose} wide>
     {draft && <form className="form-stack" onSubmit={onSubmit}>
       <div className="form-grid two"><label>Data<input type="date" value={draft.appointment_date} onChange={(e) => setDraft({ ...draft, appointment_date: e.target.value })} /></label><label>Técnico<select value={draft.technician_id} onChange={(e) => { const t = technicians.find((x) => x.id === e.target.value); const nextBranch = t?.branch || draft.branch; setDraft({ ...draft, technician_id: e.target.value, branch: nextBranch, service_city: draft.service_reason === 'Retorno à filial' ? nextBranch : draft.service_city }); }}><option value="">Selecione o técnico</option>{technicians.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.branch}</option>)}</select></label></div>
@@ -186,11 +214,17 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       <div className="form-grid two"><label>Cliente<input value={draft.client_name} onChange={(e) => setDraft({ ...draft, client_name: e.target.value })} /></label><label>Cidade<input value={draft.service_city} onChange={(e) => setDraft({ ...draft, service_city: e.target.value })} /></label></div>
       <label>Distância do último atendimento <span style={{ color: '#94a3b8', fontWeight: 500 }}>(automático)</span>
         <div style={{ display: 'grid', gridTemplateColumns: '34px 1fr', gap: 8, alignItems: 'center' }}>
-          <span style={{ width: 34, height: 34, borderRadius: 8, background: '#f1f5f9', color: '#475569', display: 'grid', placeItems: 'center' }}>{routeBusy ? <Loader2 className="spin" size={16}/> : <Route size={16}/>}</span>
+          <span style={{ width: 34, height: 34, borderRadius: 8, background: '#f1f5f9', color: '#475569', display: 'grid', placeItems: 'center' }}>{(routeBusy || quickBusy) && !cloudReady && !quick ? <Loader2 className="spin" size={16}/> : <Route size={16}/>}</span>
           <input
             readOnly
-            value={routeBusy
-              ? 'Carregando da nuvem...'
+            value={cloudReady
+              ? `${routePreview!.distance_km!.toLocaleString('pt-BR')} km`
+              : quick
+                ? `${quick.km.toLocaleString('pt-BR')} km${quick.approx ? ' (aproximado)' : ''}`
+                : quickBusy || routeBusy
+                  ? 'Calculando...'
+                  : !draft.service_city.trim()
+                    ? 'Informe a cidade'
               : routePreview?.status === 'ready' && routePreview.distance_km != null
                 ? `${routePreview.distance_km.toLocaleString('pt-BR')} km`
                 : routePreview?.status === 'location_missing'
@@ -204,7 +238,11 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
           />
         </div>
         <small style={{ marginTop: 5, color: '#94a3b8', fontWeight: 500 }}>
-          {routePreview?.status === 'ready'
+          {cloudReady
+            ? `${routePreview!.origin_label || 'Origem'} → ${routePreview!.destination_label || draft.service_city || 'Destino'}${routePreview!.duration_min != null ? ` · ~${routePreview!.duration_min} min` : ''}`
+            : quick
+              ? `${quick.from} → ${quick.to} · ~${quick.min} min${quick.approx ? ' · linha reta x1,3 (roteador indisponível)' : ''}`
+            : routePreview?.status === 'ready'
             ? `${routePreview.origin_label || 'Origem'} → ${routePreview.destination_label || draft.service_city || 'Destino'}${routePreview.duration_min != null ? ` · ~${routePreview.duration_min} min` : ''}`
             : routePreview?.status === 'location_missing'
               ? 'A nuvem ainda está resolvendo a cidade/UF deste atendimento.'
