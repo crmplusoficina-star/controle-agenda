@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
-import { continueArIAFlow, startArIAFlow, type ArIAFlow } from '../lib/ariaActions';
+import { continueArIAFlow, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
 import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import { supabase } from '../lib/supabase';
@@ -66,6 +66,8 @@ export function ArIAWidget() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: 1, role: 'aria', text: `Olá, ${user.name.split(' ')[0] || user.name}. Sou a ArIA. Posso consultar Agenda, Retenção, histórico G4 e Follow-up. Pergunte “o que você consegue fazer?” para ver minhas capacidades.` },
   ]);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
 
   const dragRef = useRef<DragState | null>(null);
   const suppressClickRef = useRef(false);
@@ -230,6 +232,30 @@ export function ArIAWidget() {
     }
   }
 
+  async function askAgent(value: string): Promise<FlowReply | null> {
+    try {
+      const { data: techRows } = await supabase.from('technicians').select('name,branch').eq('active', true).order('name');
+      const history = messagesRef.current.slice(-6).map((m) => ({ role: m.role, text: m.text }));
+      const call = supabase.functions.invoke('aria-agent', {
+        body: { message: value, history, context: { today: todayIso(), user: { name: user.name, role: user.role }, branches: userBranches, technicians: techRows || [] } },
+      });
+      const timeout = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 9000));
+      const result: any = await Promise.race([call, timeout]);
+      const data = result?.data;
+      if (!data?.ok) return null;
+      if (data.intent) {
+        const routed = await runArIAIntent(data.intent, data.args || {}, user, userBranches);
+        if (routed) return routed;
+        return null;
+      }
+      if (data.reply) return { text: data.reply, flow: null };
+      return null;
+    } catch (error) {
+      console.warn('aria_agent_unavailable', error);
+      return null;
+    }
+  }
+
   function appendArIAReply(message: string, actions?: ArIAAction[]) {
     setMessages((current) => [...current, { id: nextId.current++, role: 'aria', text: message, actions }]);
   }
@@ -269,7 +295,7 @@ export function ArIAWidget() {
 
     if (!action.view) return;
     const labels: Record<string, string> = {
-      inicio: 'Início', agenda: 'Agenda', retencao: 'Retenção', followup: 'Follow-up', dashboard: 'Dashboard',
+      inicio: 'Início', agenda: 'Agenda', retencao: 'Retenção', followup: 'Follow-up', dashboard: 'Dashboard', inspecao150: 'Visita 150h', campanhas: 'Campanhas', usuarios: 'Usuários e acessos',
     };
     clickButton(labels[action.view], '.sidebar');
     window.setTimeout(() => {
@@ -311,6 +337,7 @@ export function ArIAWidget() {
         }
       } else {
         const flowReply = (flowRef.current ? await continueArIAFlow(flowRef.current, value, user, userBranches) : null)
+          || await askAgent(value)
           || await startArIAFlow(value, user, userBranches);
         flowRef.current = flowReply?.flow ?? null;
         reply = flowReply || await answerSmartArIA(value, user) || await answerArIA(value, user);
