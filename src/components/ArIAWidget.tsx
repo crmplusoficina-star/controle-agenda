@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
+import { continueArIAFlow, startArIAFlow, type ArIAFlow } from '../lib/ariaActions';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
 import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import { supabase } from '../lib/supabase';
@@ -53,7 +54,9 @@ function todayIso() {
 }
 
 export function ArIAWidget() {
-  const { user } = useSession();
+  const { user, branches, defaultBranches } = useSession();
+  const flowRef = useRef<ArIAFlow | null>(null);
+  const userBranches = defaultBranches.length ? defaultBranches : branches.map((b) => b.name);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -208,7 +211,34 @@ export function ArIAWidget() {
     if (created || alreadyOpen) openFollowupAndForceRefresh();
   }
 
+  async function runChoice(action: ArIAAction) {
+    if (busy || !action.choice) return;
+    setMessages((current) => [...current, { id: nextId.current++, role: 'user', text: action.label }]);
+    setBusy(true);
+    scrollBottom();
+    try {
+      const reply = await continueArIAFlow(flowRef.current, action.choice, user, userBranches);
+      flowRef.current = reply?.flow ?? null;
+      appendArIAReply(reply?.text || 'Essa opção expirou. Pode repetir o pedido?', reply?.actions);
+    } catch (error) {
+      console.error('aria_flow_failed', error);
+      flowRef.current = null;
+      appendArIAMessage('Não consegui concluir essa ação agora. Nada foi alterado.');
+    } finally {
+      setBusy(false);
+      scrollBottom();
+    }
+  }
+
+  function appendArIAReply(message: string, actions?: ArIAAction[]) {
+    setMessages((current) => [...current, { id: nextId.current++, role: 'aria', text: message, actions }]);
+  }
+
   async function runAction(action: ArIAAction) {
+    if (action.choice) {
+      await runChoice(action);
+      return;
+    }
     const richAction = action as RichArIAAction;
     const prospects = richAction.prospects || [];
 
@@ -280,7 +310,10 @@ export function ArIAWidget() {
           };
         }
       } else {
-        reply = await answerSmartArIA(value, user) || await answerArIA(value, user);
+        const flowReply = (flowRef.current ? await continueArIAFlow(flowRef.current, value, user, userBranches) : null)
+          || await startArIAFlow(value, user, userBranches);
+        flowRef.current = flowReply?.flow ?? null;
+        reply = flowReply || await answerSmartArIA(value, user) || await answerArIA(value, user);
         lastQuestionRef.current = value;
         lastAnswerRef.current = reply.text;
       }

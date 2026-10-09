@@ -137,6 +137,11 @@ function OperationalApp() {
     setInsights((data || []) as Insight[]);
   }, [branch, branches]);
   useEffect(() => { loadInsights(); }, [loadInsights]);
+  useEffect(() => {
+    const refresh = () => { void loadAgenda(); void loadInsights(); };
+    window.addEventListener('aria:data-changed', refresh);
+    return () => window.removeEventListener('aria:data-changed', refresh);
+  }, [loadAgenda, loadInsights]);
 
   useEffect(() => {
     if (!['retencao', 'agenda', 'dashboard'].includes(view) || !branches.length) return;
