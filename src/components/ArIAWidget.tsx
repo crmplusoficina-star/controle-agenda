@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
-import { alternativesFor, continueArIAFlow, intentMenu, refineLastIntent, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
+import { alternativesFor, continueArIAFlow, intentMenu, markUnresolved, refineLastIntent, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
 import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import { supabase } from '../lib/supabase';
@@ -364,7 +364,7 @@ export function ArIAWidget() {
         flowRef.current = flowReply?.flow ?? null;
         reply = flowReply || await answerSmartArIA(effective, user) || await answerArIA(effective, user);
         const unresolved = !flowReply && reply.text.startsWith('Ainda não consegui interpretar');
-        if (unresolved) reply = intentMenu(effective) || reply;
+        if (unresolved) { markUnresolved(effective, user); reply = intentMenu(effective) || reply; }
         unresolvedRef.current = unresolved ? effective : '';
         lastQuestionRef.current = value;
         lastAnswerRef.current = reply.text;

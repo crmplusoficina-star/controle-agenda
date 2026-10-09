@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import type { AppUser } from '../session';
 import type { ArIAAction, ArIAReply } from './ariaBrain';
 import { effectiveCity } from '../features/ServiceProgramsView';
-import { INTENT_LABELS, extractDates as extractDatesAll, interpret, learnIntent, pastWords, rankIntents, type NluIntent } from './ariaNlu';
+import { INTENT_LABELS, applyAliases, extractDates as extractDatesAll, interpret, learnIntent, pastWords, phraseTokens, rankIntents, setSharedLearning, type NluIntent, type SharedMemory } from './ariaNlu';
 import { isCityProspectIntent } from './ariaSmart';
 
 type Tech = { id: string; name: string; branch: string; active: boolean };
@@ -653,6 +653,11 @@ Faturamento e gestão
 Equipe
 • "trocar a filial do Almivar" · "cadastrar técnico Pedro em Marabá" · "desativar técnico Jonas"
 
+Me ensine (vale para toda a equipe)
+• "quando eu disser ver a turma, quero dizer agenda de hoje"
+• "Cezinha é o técnico Cezaro" · quando eu errar: "não foi isso" e escolha a opção certa
+• "o que você aprendeu?"
+
 Toda ação pede confirmação antes de gravar, e "desfaz" volta a última.`,
     actions: [
       { label: 'Sugestões do dia', choice: '__say|me dê sugestões' },
@@ -825,7 +830,7 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
   const branches = await loadActiveBranches();
   const findBranch = (name: string) => (name ? branches.find((b) => fold(b) === fold(name)) || branches.find((b) => fold(name).includes(fold(b))) : undefined);
   const date = (value: string) => (value ? parseDate(value) || undefined : undefined);
-  if (!['ajuda', 'navegar'].includes(intent)) lastRun = { intent, args: { ...(args || {}) } };
+  if (!['ajuda', 'navegar', 'aprendizado'].includes(intent)) lastRun = { intent, args: { ...(args || {}) } };
 
   switch (intent) {
     case 'planejar_regiao': {
@@ -836,6 +841,7 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
       return planejarRegiao(tech, a('periodo'), Number(a('meses')) || 6);
     }
     case 'sugestoes': return sugestoesGerais(user, userBranches, techs);
+    case 'aprendizado': return learningReport();
     case 'trocar_filial_tecnico': {
       const tech = findTech(a('tecnico'));
       const toBranch = findBranch(a('filial'));
@@ -1166,13 +1172,115 @@ export async function refineLastIntent(message: string, user: AppUser, userBranc
 // ---------- Entrada ----------
 
 async function nluContext() {
-  const [techs, branches] = await Promise.all([loadTechnicians(), loadActiveBranches()]);
+  const [techs, branches] = await Promise.all([loadTechnicians(), loadActiveBranches(), loadLearning()]);
   return { technicians: techs.map((t) => ({ name: t.name, branch: t.branch })), branches };
+}
+
+// ---------- Aprendizado compartilhado ----------
+// Toda a equipe ensina a mesma ArIA: frases que deram certo ganham peso, as que deram errado perdem.
+
+let learningLoadedAt = 0;
+let sharedMemory: SharedMemory[] = [];
+let sharedAliases: { kind: string; alias: string; value: string }[] = [];
+let currentUser: AppUser | null = null;
+let pending: { message: string; intent: string } | null = null;
+
+async function loadLearning(force = false) {
+  if (!force && Date.now() - learningLoadedAt < 3 * 60000) return;
+  learningLoadedAt = Date.now();
+  const [mem, al] = await Promise.all([
+    supabase.from('aria_intent_memory').select('tokens,intent,positive,negative').neq('intent', '__unresolved').order('last_used_at', { ascending: false }).limit(3000),
+    supabase.from('aria_aliases').select('kind,alias,value').limit(1000),
+  ]);
+  if (!mem.error) sharedMemory = (mem.data || []) as SharedMemory[];
+  if (!al.error) sharedAliases = (al.data || []) as any[];
+  setSharedLearning(sharedMemory, sharedAliases);
+}
+
+async function feedback(message: string, intent: string, signal: number) {
+  if (!currentUser || !message || !intent) return;
+  const ctx = await nluContext();
+  const tokens = phraseTokens(message, ctx);
+  if (!tokens.length) return;
+  // Efeito imediato nesta sessão; o banco espalha para os outros usuários.
+  if (intent !== '__unresolved') {
+    const key = [...tokens].sort().join(' ');
+    const hit = sharedMemory.find((m) => m.intent === intent && [...m.tokens].sort().join(' ') === key);
+    if (hit) { if (signal > 0) hit.positive += signal; else hit.negative -= signal; }
+    else sharedMemory.unshift({ tokens, intent, positive: Math.max(signal, 0), negative: Math.max(-signal, 0) });
+    setSharedLearning(sharedMemory, sharedAliases);
+  }
+  const { error } = await supabase.rpc('aria_intent_feedback', { p_actor: currentUser.matricula, p_tokens: tokens, p_sample: message, p_intent: intent, p_signal: signal });
+  if (error) console.warn('aria_feedback_failed', error.message);
+}
+
+// A resposta anterior não foi contestada: conta como acerto.
+function settlePending() {
+  if (pending) void feedback(pending.message, pending.intent, 1);
+  pending = null;
+}
+
+export function markUnresolved(message: string, user: AppUser) {
+  currentUser = user;
+  pending = null;
+  void feedback(message, '__unresolved', 1);
+}
+
+async function teach(message: string, user: AppUser): Promise<FlowReply | null> {
+  const raw = message.trim();
+  const t = fold(raw);
+  const rule = t.match(/^(?:quando|se|sempre que) (?:eu |alguem |a gente |o pessoal )?(?:falar|disser|digitar|escrever|pedir|mandar)\s+["“']?(.+?)["”']?\s*,?\s*(?:eu )?(?:quero dizer|quer dizer|significa|e pra|e para|entenda|e o mesmo que|faca|faz|mostre|mostra)\s+(.+)$/);
+  if (rule) {
+    const ctx = await nluContext();
+    const target = interpret(rule[2], ctx);
+    if (!target) return { text: `Ainda não entendi "${rule[2]}". Me ensine usando um pedido que eu já conheço (ex.: "quando eu disser ver a turma, quero dizer agenda de hoje").`, flow: null };
+    learnIntent(rule[1], target.intent, ctx);
+    await feedback(rule[1], target.intent, 3);
+    return { text: `Aprendi. Quando alguém disser "${rule[1]}", vou entender como: ${INTENT_LABELS[target.intent]}. Isso vale para toda a equipe.`, actions: [{ label: 'Testar agora', choice: `__say|${rule[1]}` }], flow: null };
+  }
+  const alias = raw.match(/^(?:o |a )?["“']?([A-Za-zÀ-ú][\wÀ-ú.\- ]{1,30}?)["”']?\s+(?:é|e|eh)\s+(?:o|a)\s+(t[ée]cnic[oa]|cliente)\s+(.{2,80})$/i);
+  if (alias) {
+    const [, nick, kindWord, valueRaw] = alias;
+    const kind = /cliente/i.test(kindWord) ? 'client' : 'tech';
+    let value = valueRaw.trim().replace(/[.!]+$/, '');
+    if (kind === 'tech') {
+      const tech = techInText(value, await loadTechnicians());
+      if (!tech) return { text: `Não encontrei o técnico "${value}".`, flow: null };
+      value = tech.name;
+    }
+    const { error } = await supabase.rpc('aria_save_alias', { p_actor: user.matricula, p_kind: kind, p_alias: nick, p_value: value });
+    if (error) return { text: `Não consegui salvar o apelido: ${error.message}`, flow: null };
+    await loadLearning(true);
+    return { text: `Aprendi. "${nick}" agora quer dizer ${kind === 'tech' ? 'o técnico' : 'o cliente'} ${value}, para toda a equipe.`, flow: null };
+  }
+  return null;
+}
+
+async function learningReport(): Promise<FlowReply> {
+  await loadLearning(true);
+  const [{ data: top }, { data: unresolved }, { count }] = await Promise.all([
+    supabase.from('aria_intent_memory').select('sample,intent,positive,negative,users').neq('intent', '__unresolved').order('last_used_at', { ascending: false }).limit(12),
+    supabase.from('aria_intent_memory').select('sample,positive').eq('intent', '__unresolved').order('last_used_at', { ascending: false }).limit(8),
+    supabase.from('aria_intent_memory').select('id', { count: 'exact', head: true }).neq('intent', '__unresolved'),
+  ]);
+  const lines = (top || []).map((r: any) => `• "${String(r.sample || '').slice(0, 60)}" → ${INTENT_LABELS[r.intent as NluIntent] || r.intent} (${r.positive} acerto(s)${r.negative ? `, ${r.negative} erro(s)` : ''}, ${(r.users || []).length} pessoa(s))`);
+  const al = sharedAliases.slice(0, 10).map((a) => `• "${a.alias}" = ${a.value}`);
+  const un = (unresolved || []).map((r: any) => `• "${String(r.sample || '').slice(0, 70)}"`);
+  return {
+    text: `Já aprendi ${count || 0} forma(s) de pedir com a equipe.${lines.length ? `\n\nÚltimas:\n${lines.join('\n')}` : ''}${al.length ? `\n\nApelidos:\n${al.join('\n')}` : ''}${un.length ? `\n\nPedidos que ainda não entendi (me ensine):\n${un.join('\n')}` : ''}\n\nComo me ensinar:\n• Quando eu errar, diga "não foi isso" e escolha a opção certa.\n• "quando eu disser ver a turma, quero dizer agenda de hoje"\n• "Cezinha é o técnico Cezaro" · "Ocidental SL é o cliente OCIDENTAL COMERCIO E SERVICOS LTDA"`,
+    flow: null,
+  };
 }
 
 const ACTION_HINT = /\b(agend|marc|remarc|reagend|troc|mud|pass|transfer|desativ|adicion|cadastr|abr|cri|conclu|finaliz|exclu|apag|cancel|desmarc|registr|coloc|jog|tir)/;
 
-export async function startArIAFlow(message: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
+export async function startArIAFlow(rawMessage: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
+  currentUser = user;
+  settlePending();
+  await loadLearning();
+  const taught = await teach(rawMessage, user);
+  if (taught) return taught;
+  const message = applyAliases(rawMessage);
   if (/^(cancela|cancelar|cancele|desisto|esquece|deixa)\b/.test(fold(message)) && fold(message).split(' ').length <= 2) return { text: 'Não há nenhuma ação em andamento para cancelar.', flow: null };
   const t = fold(message);
   if (/^(oi|ola|ole|bom dia|boa tarde|boa noite|e ai|eai|hey|opa|salve|tudo bem|tudo bom)\b/.test(t) && t.split(' ').length <= 5) {
@@ -1203,7 +1311,10 @@ export async function startArIAFlow(message: string, user: AppUser, userBranches
   if (result?.args?.tecnico) remember(result.args.tecnico);
   if (result) {
     const reply = await runArIAIntent(result.intent, result.args, user, userBranches);
-    if (reply) return reply;
+    if (reply) {
+      if (!['ajuda', 'aprendizado'].includes(result.intent)) pending = { message: rawMessage, intent: result.intent };
+      return reply;
+    }
   }
   return null;
 }
@@ -1211,7 +1322,9 @@ export async function startArIAFlow(message: string, user: AppUser, userBranches
 // Quando o usuário diz que a ArIA errou: oferece as interpretações alternativas mais prováveis.
 export async function alternativesFor(message: string): Promise<FlowReply> {
   const ctx = await nluContext();
-  const ran = lastRun?.intent;
+  const ran = pending?.intent || lastRun?.intent;
+  if (pending) void feedback(pending.message, pending.intent, -1);
+  pending = null;
   const options = rankIntents(message, ctx, 6).filter((i) => i !== ran).slice(0, 4);
   return {
     text: 'Desculpe, entendi errado. O que você queria? Escolha abaixo (eu aprendo com a escolha) ou escreva de outro jeito:',
@@ -1254,7 +1367,10 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     const original = decodeURIComponent(encoded || '');
     const ctx = await nluContext();
     learnIntent(original, intent as NluIntent, ctx);
-    const forced = interpret(original, ctx, intent as NluIntent);
+    currentUser = user;
+    pending = null;
+    void feedback(original, intent, 2);
+    const forced = interpret(applyAliases(original), ctx, intent as NluIntent);
     return runArIAIntent(intent, forced?.args || {}, user, userBranches);
   }
   if (input.startsWith('__say|')) return startArIAFlow(input.slice(6), user, userBranches);
