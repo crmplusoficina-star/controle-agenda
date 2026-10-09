@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import type { AppUser } from '../session';
 import type { ArIAAction, ArIAReply } from './ariaBrain';
 import { effectiveCity } from '../features/ServiceProgramsView';
-import { INTENT_LABELS, extractDates as extractDatesAll, interpret, learnIntent, type NluIntent } from './ariaNlu';
+import { INTENT_LABELS, extractDates as extractDatesAll, interpret, learnIntent, pastWords, rankIntents, type NluIntent } from './ariaNlu';
 import { isCityProspectIntent } from './ariaSmart';
 
 type Tech = { id: string; name: string; branch: string; active: boolean };
@@ -190,7 +190,7 @@ async function askSchedule(flow: Extract<ArIAFlow, { kind: 'schedule' }>, user: 
     };
   }
   return {
-    text: `Confirma o agendamento?\n\n• ${flow.reason}\n• ${flow.machine.client || 'Cliente não informado'} · ${flow.machine.serial}\n• Cidade: ${flow.machine.city || 'não informada'}\n• Técnico: ${flow.tech.name} (${flow.tech.branch})\n• Data: ${brDate(flow.date)}`,
+    text: `Confirma o agendamento?\n\n• ${flow.reason}\n• ${flow.machine.client || 'Cliente não informado'}${flow.machine.serial ? ` · ${flow.machine.serial}` : ''}\n• Cidade: ${flow.machine.city || 'não informada'}\n• Técnico: ${flow.tech.name} (${flow.tech.branch})\n• Data: ${brDate(flow.date)}`,
     actions: CONFIRM,
     flow: { ...flow, step: 'confirm' },
   };
@@ -202,7 +202,7 @@ async function runSchedule(flow: Extract<ArIAFlow, { kind: 'schedule' }>): Promi
     appointment_date: flow.date,
     technician_id: flow.tech!.id,
     client_name: flow.machine!.client || null,
-    equipment_serial: flow.machine!.serial,
+    equipment_serial: flow.machine!.serial || null,
     service_city: flow.machine!.city || null,
     service_reason: flow.reason,
     description: `Agendado pela ArIA`,
@@ -636,6 +636,11 @@ Máquinas, 150h e campanhas
 • "pendências de Marabá" · "150h e campanhas atrasadas"
 • "o que o Anderson pode aproveitar na rota?" · "a máquina VCE... está em Itacoatiara"
 
+Planejamento e sugestões
+• "analisa a região do Igor e sugere visitas" · "por onde o Jonas passou semana passada"
+• "me dê sugestões" · "o que eu priorizo hoje?"
+• Depois de uma resposta: "e pra trás?", "e amanhã?", "com 12 meses", "cadê?"
+
 Clientes e comercial
 • "3 clientes de Barcarena há mais de 6 meses" · "quantos clientes temos em Barcarena?"
 • "telefone da Ocidental" · "o telefone da Ocidental é 98 99999-0000"
@@ -650,6 +655,7 @@ Equipe
 
 Toda ação pede confirmação antes de gravar, e "desfaz" volta a última.`,
     actions: [
+      { label: 'Sugestões do dia', choice: '__say|me dê sugestões' },
       { label: 'Agenda de hoje', choice: '__say|agenda de hoje' },
       { label: 'Técnicos livres hoje', choice: '__say|quais técnicos estão ociosos hoje' },
       { label: 'Resumo da semana', choice: '__say|resumo da semana' },
@@ -819,8 +825,17 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
   const branches = await loadActiveBranches();
   const findBranch = (name: string) => (name ? branches.find((b) => fold(b) === fold(name)) || branches.find((b) => fold(name).includes(fold(b))) : undefined);
   const date = (value: string) => (value ? parseDate(value) || undefined : undefined);
+  if (!['ajuda', 'navegar'].includes(intent)) lastRun = { intent, args: { ...(args || {}) } };
 
   switch (intent) {
+    case 'planejar_regiao': {
+      const tech = findTech(a('tecnico')) || (memory.tech ? techs.find((t) => t.name === memory.tech) : undefined);
+      if (!tech) return { text: 'De qual técnico você quer que eu analise a região?', actions: techs.slice(0, 12).map((t) => choice(`${t.name} · ${t.branch}`, `__say|analise a região do ${t.name}${a('periodo') === 'passado' ? ' pra trás' : ''}`)), flow: null };
+      remember(tech.name);
+      if (lastRun) lastRun.args.tecnico = tech.name;
+      return planejarRegiao(tech, a('periodo'), Number(a('meses')) || 6);
+    }
+    case 'sugestoes': return sugestoesGerais(user, userBranches, techs);
     case 'trocar_filial_tecnico': {
       const tech = findTech(a('tecnico'));
       const toBranch = findBranch(a('filial'));
@@ -959,6 +974,195 @@ export async function runArIAIntent(intent: string, args: Record<string, string>
   }
 }
 
+// ---------- Análise de região e sugestões ----------
+
+const DAY_MS = 86400000;
+const addDays = (base: Date, n: number) => new Date(base.getTime() + n * DAY_MS);
+const monthsSince = (value?: string | null) => (value ? Math.floor((Date.now() - new Date(value).getTime()) / (30.4 * DAY_MS)) : 999);
+
+type ClientRow = { client_name: string; branch: string; city: string; last_service_at: string | null; service_count: number | null; machine_count: number | null };
+
+async function openFollowupKeys() {
+  const { data } = await supabase.from('followups').select('client_name,branch').neq('stage', 'encerrar').limit(3000);
+  return new Set((data || []).map((r: any) => `${fold(r.client_name)}|${fold(r.branch)}`));
+}
+
+async function clientsOfBranches(branches: string[]): Promise<ClientRow[]> {
+  if (!branches.length) return [];
+  const { data } = await supabase.from('g4_client_city_summary').select('client_name,branch,city,last_service_at,service_count,machine_count').in('branch', branches).limit(5000);
+  return (data || []) as ClientRow[];
+}
+
+function rankInactive(rows: ClientRow[], minMonths: number, skip: Set<string>) {
+  const unique = new Map<string, ClientRow>();
+  for (const r of rows) {
+    if (!r.client_name || /\btracbel\b/i.test(r.client_name)) continue;
+    const key = `${fold(r.client_name)}|${fold(r.branch)}`;
+    if (skip.has(key) || monthsSince(r.last_service_at) < minMonths) continue;
+    const cur = unique.get(key);
+    if (!cur || Number(r.service_count || 0) > Number(cur.service_count || 0)) unique.set(key, r);
+  }
+  // Clientes com mais histórico primeiro (maior chance de retorno), depois os parados há mais tempo.
+  return Array.from(unique.values()).sort((a, b) => (Number(b.service_count || 0) + Number(b.machine_count || 0) * 3) - (Number(a.service_count || 0) + Number(a.machine_count || 0) * 3) || monthsSince(b.last_service_at) - monthsSince(a.last_service_at));
+}
+
+async function freeDays(tech: Tech, count = 5) {
+  const days = nextWorkdays(12).filter((d) => d > iso(new Date()));
+  const { data } = await supabase.from('appointments').select('appointment_date,service_reason').eq('technician_id', tech.id).gte('appointment_date', days[0]).lte('appointment_date', days[days.length - 1]);
+  const busy = new Set((data || []).filter((r: any) => r.service_reason !== 'Sem agenda').map((r: any) => r.appointment_date));
+  return days.filter((d) => !busy.has(d) && new Date(`${d}T12:00:00`).getDay() !== 6).slice(0, count);
+}
+
+async function planejarRegiao(tech: Tech, periodo: string, minMonths: number): Promise<FlowReply> {
+  const today = new Date();
+  const [wFrom, wTo] = weekRange();
+  let from = wFrom; let to = wTo; let label = `nesta semana (${brDate(wFrom)} a ${brDate(wTo)})`;
+  if (periodo === 'passado') { from = iso(addDays(today, -30)); to = iso(addDays(today, -1)); label = 'nos últimos 30 dias (até ontem)'; }
+  if (periodo === 'futuro') { from = iso(today); to = iso(addDays(today, 14)); label = 'nos próximos 14 dias'; }
+  const service = (r: any) => !NON_SERVICE.includes(r.service_reason || '');
+  let rows = (await apptsBetween(from, to, [], tech.id)).filter(service);
+  if (!rows.length) {
+    from = iso(addDays(today, -45)); to = iso(addDays(today, 14));
+    rows = (await apptsBetween(from, to, [], tech.id)).filter(service);
+    label = 'entre os últimos 45 dias e os próximos 14 (não havia nada no período pedido)';
+  }
+
+  const branchSet = Array.from(new Set([tech.branch, ...rows.map((r) => r.branch).filter(Boolean)]));
+  const [clients, skip, insp, camp] = await Promise.all([
+    clientsOfBranches(branchSet),
+    openFollowupKeys(),
+    supabase.from('inspection_150h').select('pin,branch,client_name,city,service_city').is('executed_date', null).in('branch', branchSet).limit(2000),
+    supabase.from('campaign_machines').select('campaign_code,pin,branch,client_name,city,service_city').is('executed_date', null).in('branch', branchSet).limit(2000),
+  ]);
+
+  // Cidades por onde o técnico passou: cidade do atendimento ou, se vazia, a cidade do cliente no G4.
+  const cityOfClient = new Map(clients.map((c) => [fold(c.client_name), c.city]));
+  const cityCount = new Map<string, { name: string; n: number; days: Set<string>; clients: Set<string> }>();
+  for (const r of rows) {
+    const city = r.service_city || cityOfClient.get(fold(r.client_name)) || '';
+    if (!city) continue;
+    const key = fold(city);
+    const cur = cityCount.get(key) || { name: city, n: 0, days: new Set<string>(), clients: new Set<string>() };
+    cur.n += 1; cur.days.add(r.appointment_date); if (r.client_name) cur.clients.add(fold(r.client_name));
+    cityCount.set(key, cur);
+  }
+  let cities = Array.from(cityCount.values()).sort((a, b) => b.n - a.n);
+  const usedBase = !cities.length;
+  if (usedBase) {
+    const base = clients.filter((c) => fold(c.city) === fold(tech.branch) || fold(c.city).startsWith(fold(tech.branch).split(' ')[0]));
+    const name = base[0]?.city || tech.branch;
+    cities = [{ name, n: 0, days: new Set(), clients: new Set() }];
+  }
+  const cityKeys = new Set(cities.map((c) => fold(c.name)));
+  const visited = new Set(cities.flatMap((c) => Array.from(c.clients)));
+
+  const regional = clients.filter((c) => cityKeys.has(fold(c.city)) && !visited.has(fold(c.client_name)));
+  const inactive = rankInactive(regional, minMonths, skip).slice(0, 8);
+  const pend150 = (insp.data || []).filter((r: any) => cityKeys.has(fold(effectiveCity(r))));
+  const pendCamp = (camp.data || []).filter((r: any) => cityKeys.has(fold(effectiveCity(r))));
+  const free = await freeDays(tech);
+
+  const parts: string[] = [];
+  parts.push(`Análise da região do ${tech.name} (${tech.branch}) ${label}:`);
+  if (usedBase) parts.push(`\nNão encontrei atendimentos com cidade nesse período, então usei a base dele: ${cities[0].name}.`);
+  else parts.push(`\n${periodo === 'passado' ? 'Onde ele atendeu' : 'Onde ele atendeu/vai atender'}:\n${cities.slice(0, 5).map((c) => { const days = Array.from(c.days).sort(); return `• ${c.name}: ${c.n} atendimento(s) · ${days.length > 3 ? `${brDate(days[0])} a ${brDate(days[days.length - 1])}` : days.map(brDate).join(', ')}`; }).join('\n')}`);
+  if (inactive.length) {
+    parts.push(`\nClientes parados há ${minMonths}+ meses nessas cidades (sem follow-up aberto):\n${inactive.map((c, i) => `${i + 1}. ${c.client_name} · ${c.city} · ${monthsSince(c.last_service_at)} meses sem atendimento · ${Number(c.service_count || 0)} OS · ${Number(c.machine_count || 0)} máq.`).join('\n')}`);
+  } else parts.push(`\nNão há clientes parados há ${minMonths}+ meses nessas cidades que já não estejam em follow-up.`);
+  if (pend150.length || pendCamp.length) parts.push(`\nPendências na mesma região: ${pend150.length} Visita 150h e ${pendCamp.length} campanha(s) em aberto.`);
+  if (free.length) parts.push(`\nDias livres do ${tech.name}: ${free.map(brDate).join(', ')}.`);
+  const top = cities[0]?.name;
+  if (inactive.length && free.length) {
+    const byCity = new Map<string, ClientRow[]>();
+    for (const c of inactive) byCity.set(c.city, [...(byCity.get(c.city) || []), c]);
+    const [bestCity, group] = Array.from(byCity.entries()).sort((x, y) => y[1].length - x[1].length)[0];
+    const has150 = pend150.some((r: any) => fold(effectiveCity(r)) === fold(bestCity));
+    parts.push(`\nSugestão: em ${brDate(free[0])}, rota em ${bestCity} visitando ${group.slice(0, 3).map((c) => c.client_name).join(', ')}${has150 ? ' e aproveitando a Visita 150h pendente lá' : ''}. Toque num cliente para agendar ou prospecte todos no Follow-up.`);
+  }
+
+  const prospects = inactive.map((c) => ({ client_name: c.client_name, branch: c.branch, city: c.city }));
+  const actions: any[] = [
+    ...inactive.slice(0, 4).map((c) => ({ label: `Agendar visita: ${c.client_name.slice(0, 28)}`, choice: `__visit|${encodeURIComponent(c.client_name)}|${encodeURIComponent(c.city || '')}|${c.branch}|${tech.id}` })),
+    ...(prospects.length ? [{ label: `Prospectar os ${prospects.length} no Follow-up`, operation: 'prospect', prospects }] : []),
+    ...pend150.filter((r: any) => r.pin).slice(0, 2).map((r: any) => ({ label: `Agendar 150h ${r.client_name || r.pin}`.slice(0, 40), choice: `__schedule|Visita 150h|${r.pin}|${tech.id}` })),
+    ...(periodo !== 'passado' ? [{ label: 'Ver onde ele esteve (pra trás)', choice: `__say|analise a região do ${tech.name} pra trás` }] : [{ label: 'Ver a semana que vem', choice: `__say|planejar região do ${tech.name} semana que vem` }]),
+  ];
+  return { text: parts.join('\n'), actions, flow: null };
+}
+
+async function sugestoesGerais(user: AppUser, userBranches: string[], techs: Tech[]): Promise<FlowReply> {
+  const scope = userBranches.length ? userBranches : Array.from(new Set(techs.map((t) => t.branch)));
+  const today = iso(new Date());
+  const pool = techs.filter((t) => scope.includes(t.branch));
+  const [dayRows, clients, skip, insp, fups] = await Promise.all([
+    supabase.from('appointments').select('technician_id,service_reason').eq('appointment_date', today).in('technician_id', pool.map((t) => t.id)),
+    clientsOfBranches(scope),
+    openFollowupKeys(),
+    supabase.from('inspection_150h').select('pin,delivery_date,programmed_date').in('branch', scope).is('executed_date', null).is('programmed_date', null).limit(2000),
+    supabase.from('followups').select('id,next_followup_date,stage').or(`created_by_matricula.eq.${user.matricula},updated_by_matricula.eq.${user.matricula}`).neq('stage', 'encerrar').lte('next_followup_date', today).limit(200),
+  ]);
+  const busy = new Set((dayRows.data || []).filter((r: any) => r.service_reason !== 'Sem agenda').map((r: any) => r.technician_id));
+  const idle = pool.filter((t) => !busy.has(t.id));
+  const inactive = rankInactive(clients, 6, skip).filter((c) => monthsSince(c.last_service_at) <= 24).slice(0, 3);
+  const late150 = (insp.data || []).filter((r: any) => r.delivery_date && monthsSince(r.delivery_date) >= 1).length;
+  const due = (fups.data || []).length;
+
+  const lines: string[] = [`Minhas sugestões para hoje (${brDate(today)}), ${user.name.split(' ')[0]}:`];
+  let n = 1;
+  if (idle.length) lines.push(`\n${n++}. ${idle.length} técnico(s) sem atendimento hoje: ${idle.slice(0, 6).map((t) => t.name).join(', ')}${idle.length > 6 ? '…' : ''}. Dá para encaixar visitas de retenção ou 150h — toque em "Planejar região" para eu montar a rota.`);
+  if (late150) lines.push(`\n${n++}. ${late150} Visita(s) 150h sem programação há mais de 30 dias da entrega técnica.`);
+  if (inactive.length) lines.push(`\n${n++}. Clientes com bom histórico parados de 6 a 24 meses:\n${inactive.map((c) => `   • ${c.client_name} · ${c.city} · ${monthsSince(c.last_service_at)} meses · ${Number(c.service_count || 0)} OS`).join('\n')}`);
+  if (due) lines.push(`\n${n++}. Você tem ${due} follow-up(s) vencido(s) ou para hoje.`);
+  if (n === 1) lines.push('\nEstá tudo em dia: sem técnico ocioso, sem 150h atrasada e sem follow-up vencido.');
+
+  const prospects = inactive.map((c) => ({ client_name: c.client_name, branch: c.branch, city: c.city }));
+  const actions: any[] = [
+    ...idle.slice(0, 3).map((t) => ({ label: `Planejar região: ${t.name}`, choice: `__say|analise a região do ${t.name} e sugira visitas` })),
+    ...(late150 ? [{ label: '150h atrasadas', choice: '__say|150h e campanhas atrasadas' }] : []),
+    ...(prospects.length ? [{ label: `Prospectar os ${prospects.length} clientes`, operation: 'prospect', prospects }] : []),
+    ...(due ? [{ label: 'Abrir Follow-up', view: 'followup' }] : []),
+  ];
+  return { text: lines.join('\n'), actions, flow: null };
+}
+
+// Último pedido executado: permite "e pra trás?", "cadê?", "??", "e amanhã?".
+let lastRun: { intent: string; args: Record<string, string> } | null = null;
+
+const REPEAT = /^(mas )?(cade|cadee|e ai|e entao|e agora|nada|entao|continua|continue|segue|manda|mostra|e o resultado|resultado|faz|faca|faz ai|faz isso|vai)( ai| isso| o resultado| logo)?$/;
+
+export async function refineLastIntent(message: string, user: AppUser, userBranches: string[]): Promise<FlowReply | null> {
+  if (!lastRun) return null;
+  const t = fold(message).replace(/[?!.,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || REPEAT.test(t)) {
+    const reply = await runArIAIntent(lastRun.intent, lastRun.args, user, userBranches);
+    return reply ? { ...reply, text: `Aqui está:\n\n${reply.text}` } : null;
+  }
+  if (t.split(' ').length > 10) return null;
+  const fresh = interpret(message, await nluContext(), undefined, memory);
+  if (fresh && fresh.score >= 7) return null;
+  const args = { ...lastRun.args };
+  let intent = lastRun.intent;
+  let note = '';
+  if (pastWords(t)) {
+    if (['onde_tecnico', 'planejar_regiao', 'oportunidades_rota'].includes(intent)) { intent = 'planejar_regiao'; args.periodo = 'passado'; }
+    else if (intent === 'agenda_dia') args.data = iso(addDays(new Date(), -1));
+    else args.periodo = 'passado';
+    note = 'Refiz olhando para trás (até ontem).';
+  } else if (/proxima semana|semana que vem|pra frente|para frente|proximos dias/.test(t)) {
+    if (['onde_tecnico', 'planejar_regiao'].includes(intent)) { intent = 'planejar_regiao'; args.periodo = 'futuro'; }
+    else args.periodo = 'futuro';
+    note = 'Refiz olhando para frente.';
+  } else {
+    const dates = extractDatesAll(message);
+    const months = (t.match(/\b(\d{1,2})\s*meses?\b/) || [])[1];
+    if (dates.length && /^(e |mas |nao |agora |e pra |e para |pra |para )?(hoje|amanha|ontem|depois|segunda|terca|quarta|quinta|sexta|sabado|dia|\d)/.test(t)) { args.data = dates[0]; note = `Refiz para ${brDate(dates[0])}.`; }
+    else if (months && intent === 'planejar_regiao') { args.meses = months; note = `Refiz com clientes parados há ${months}+ meses.`; }
+    else return null;
+  }
+  const reply = await runArIAIntent(intent, args, user, userBranches);
+  return reply ? { ...reply, text: `${note}\n\n${reply.text}` } : null;
+}
+
 // ---------- Entrada ----------
 
 async function nluContext() {
@@ -977,6 +1181,7 @@ export async function startArIAFlow(message: string, user: AppUser, userBranches
     return {
       text: `${hello}, ${user.name.split(' ')[0]}! Em que posso ajudar? Você pode pedir do seu jeito, por exemplo:`,
       actions: [
+        { label: 'Sugestões do dia', choice: '__say|me dê sugestões' },
         { label: 'Pendências da minha filial', choice: '__say|quais as pendências da minha filial' },
         { label: 'Agendar Visita 150h', choice: '__say|agendar visita 150h' },
         { label: 'Quem ligar hoje', choice: '__say|quem devo ligar hoje' },
@@ -1001,6 +1206,23 @@ export async function startArIAFlow(message: string, user: AppUser, userBranches
     if (reply) return reply;
   }
   return null;
+}
+
+// Quando o usuário diz que a ArIA errou: oferece as interpretações alternativas mais prováveis.
+export async function alternativesFor(message: string): Promise<FlowReply> {
+  const ctx = await nluContext();
+  const ran = lastRun?.intent;
+  const options = rankIntents(message, ctx, 6).filter((i) => i !== ran).slice(0, 4);
+  return {
+    text: 'Desculpe, entendi errado. O que você queria? Escolha abaixo (eu aprendo com a escolha) ou escreva de outro jeito:',
+    actions: [
+      ...options.map((intent) => ({ label: INTENT_LABELS[intent], choice: `__intent|${intent}|${encodeURIComponent(message)}` })),
+      { label: 'Analisar região de um técnico', choice: `__intent|planejar_regiao|${encodeURIComponent(message)}` },
+      { label: 'Sugestões do dia', choice: '__say|me dê sugestões' },
+      { label: 'Ver tudo que sei fazer', choice: '__say|o que você faz?' },
+    ].filter((a, i, list) => list.findIndex((b) => b.label === a.label) === i),
+    flow: null,
+  };
 }
 
 export function intentMenu(message: string): FlowReply | null {
@@ -1036,6 +1258,12 @@ export async function continueArIAFlow(flow: ArIAFlow | null, input: string, use
     return runArIAIntent(intent, forced?.args || {}, user, userBranches);
   }
   if (input.startsWith('__say|')) return startArIAFlow(input.slice(6), user, userBranches);
+  if (input.startsWith('__visit|')) {
+    const [, client, city, branch, techId] = input.split('|');
+    const tech = (await loadTechnicians()).find((t) => t.id === techId);
+    const name = decodeURIComponent(client || '');
+    return askSchedule({ kind: 'schedule', step: 'machine', reason: 'Deslocamento cliente', machine: { serial: '', client: name, city: decodeURIComponent(city || ''), branch: branch || '', label: name }, tech }, user, userBranches);
+  }
   if (input.startsWith('__bill|')) {
     const techs = await loadTechnicians();
     const { data } = await supabase.from('appointments').select('id,appointment_date,client_name,equipment_serial,service_city,service_reason,technician_id,branch').eq('id', input.split('|')[1]).maybeSingle();

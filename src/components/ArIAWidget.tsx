@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bot, GripHorizontal, Maximize2, Minimize2, Send, X } from 'lucide-react';
 import { useSession } from '../session';
-import { continueArIAFlow, intentMenu, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
+import { alternativesFor, continueArIAFlow, intentMenu, refineLastIntent, runArIAIntent, startArIAFlow, type ArIAFlow, type FlowReply } from '../lib/ariaActions';
 import { answerArIA, isArIACorrection, type ArIAAction } from '../lib/ariaBrain';
 import { answerSmartArIA, learnCorrectionResilient, markArIASuggestionDecision, type ArIAProspect } from '../lib/ariaSmart';
 import { supabase } from '../lib/supabase';
@@ -328,7 +328,17 @@ export function ArIAWidget() {
 
     try {
       let reply;
-      if (isArIACorrection(value) && lastQuestionRef.current) {
+      const folded = fold(value).replace(/[?!.,;]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const complaint = folded.split(' ').length <= 8 && /^(mas )?nao (foi |e |era |eh )?(isso|isto)\b|errad|nao entendeu|entendeu errado|nada a ver|nao e o que (eu )?(pedi|queria)/.test(folded) && !/o correto|quis dizer|na verdade/.test(folded);
+      const refined = !complaint && !flowRef.current ? await refineLastIntent(value, user, userBranches) : null;
+      if (complaint && lastQuestionRef.current) {
+        flowRef.current = null;
+        reply = await alternativesFor(lastQuestionRef.current);
+      } else if (refined) {
+        flowRef.current = refined.flow ?? null;
+        reply = refined;
+        lastAnswerRef.current = reply.text;
+      } else if (isArIACorrection(value) && lastQuestionRef.current) {
         flowRef.current = null;
         const learned = await learnCorrectionResilient(lastQuestionRef.current, lastAnswerRef.current, value, user);
         const applied = await answerSmartArIA(`${lastQuestionRef.current}. ${value}`, user);
