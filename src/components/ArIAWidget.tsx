@@ -56,6 +56,7 @@ function todayIso() {
 export function ArIAWidget() {
   const { user, branches, defaultBranches } = useSession();
   const flowRef = useRef<ArIAFlow | null>(null);
+  const unresolvedRef = useRef('');
   const userBranches = defaultBranches.length ? defaultBranches : branches.map((b) => b.name);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [open, setOpen] = useState(false);
@@ -328,6 +329,7 @@ export function ArIAWidget() {
     try {
       let reply;
       if (isArIACorrection(value) && lastQuestionRef.current) {
+        flowRef.current = null;
         const learned = await learnCorrectionResilient(lastQuestionRef.current, lastAnswerRef.current, value, user);
         const applied = await answerSmartArIA(`${lastQuestionRef.current}. ${value}`, user);
         if (applied) {
@@ -343,12 +345,17 @@ export function ArIAWidget() {
           };
         }
       } else {
-        const flowReply = (flowRef.current ? await continueArIAFlow(flowRef.current, value, user, userBranches) : null)
-          || await startArIAFlow(value, user, userBranches)
-          || await askAgent(value);
+        const clarifying = unresolvedRef.current && /^(significa|quer dizer|ou seja|seria|isto e|isso e|eu quis dizer|quis dizer|tipo)\b/.test(fold(value));
+        const effective = clarifying ? `${unresolvedRef.current} ${value.replace(/^(significa|quer dizer|ou seja|seria|isto é|isso é|isto e|isso e|eu quis dizer|quis dizer|tipo)\s*/i, '')}` : value;
+        if (clarifying) flowRef.current = null;
+        const flowReply = (flowRef.current ? await continueArIAFlow(flowRef.current, effective, user, userBranches) : null)
+          || await startArIAFlow(effective, user, userBranches)
+          || await askAgent(effective);
         flowRef.current = flowReply?.flow ?? null;
-        reply = flowReply || await answerSmartArIA(value, user) || await answerArIA(value, user);
-        if (!flowReply && reply.text.startsWith('Ainda não consegui interpretar')) reply = intentMenu(value) || reply;
+        reply = flowReply || await answerSmartArIA(effective, user) || await answerArIA(effective, user);
+        const unresolved = !flowReply && reply.text.startsWith('Ainda não consegui interpretar');
+        if (unresolved) reply = intentMenu(effective) || reply;
+        unresolvedRef.current = unresolved ? effective : '';
         lastQuestionRef.current = value;
         lastAnswerRef.current = reply.text;
       }

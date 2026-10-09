@@ -134,6 +134,14 @@ function requestedPeriod(message: string): RetentionPeriod | null {
     return { minMonths, label: `há mais de ${minMonths} meses sem atendimento` };
   }
 
+  if (/(sem atendimento|sem visita|sem contato|inativ|parad|sem servico)/.test(text)) {
+    const inactive = text.match(/\b(\d{1,2})\s*(?:\+\s*)?meses?\b/) || text.match(/\b(?:um|uma) ano\b/);
+    if (inactive) {
+      const minMonths = inactive[1] ? Number(inactive[1]) : 12;
+      return { minMonths, label: `há pelo menos ${minMonths} meses sem atendimento` };
+    }
+  }
+
   match = text.match(/\b(?:ultimos?|nos ultimos?|dos ultimos?|ate|no maximo)\s+(\d{1,2})\s*meses?\b/);
   if (match) {
     const maxMonths = Number(match[1]);
@@ -178,12 +186,12 @@ function cityFromMessage(message: string) {
   return compact || '';
 }
 
-function isCityProspectIntent(message: string) {
+export function isCityProspectIntent(message: string) {
   const text = fold(message);
   const city = cityFromMessage(message);
   if (!city || !/\bclientes?\b/.test(text)) return false;
 
-  const explicitSuggestion = /(sugir|sugest|recomend|indiqu|selec|escolh|mostr|list|aponte|separ)/.test(text);
+  const explicitSuggestion = /(sugir|sugest|recomend|indiqu|selec|escolh|mostr|list|aponte|separ|quero|preciso|me (de|da|passa|traz|manda)|traz|busca|procur|retenc|inativ|sem atendimento)/.test(text);
   const contactIntent = /clientes?.*(entrar em contato|contatar|contactar|prospect)|(?:entrar em contato|contatar|contactar|prospect).*(clientes?)/.test(text);
   const shortNaturalRequest = (/\b\d{1,2}\s+clientes?\b/.test(text) || /\b(?:um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+clientes?\b/.test(text) || /^clientes?\b/.test(text))
     && !/(quantos|quantas|quantidade|total|existem|existe|tem quant)/.test(text);
@@ -316,7 +324,33 @@ export async function learnCorrectionResilient(originalQuestion: string, origina
   return { localSaved, sharedSaved: !fallbackError };
 }
 
+async function countClientsByCity(city: string): Promise<ArIAReply> {
+  const { data, error } = await supabase.from('g4_client_city_summary').select('client_key,last_service_at').ilike('city', city).limit(5000);
+  if (error) return { text: 'Não consegui consultar a Retenção agora.' };
+  const keys = new Map<string, string | null>();
+  for (const row of data || []) {
+    const current = keys.get(row.client_key);
+    if (!current || (row.last_service_at && row.last_service_at > current)) keys.set(row.client_key, row.last_service_at);
+  }
+  if (!keys.size) return { text: `Não encontrei clientes com atendimento em ${city} no histórico G4 das filiais ativas.` };
+  const buckets = new Map<string, number>();
+  for (const date of keys.values()) {
+    const label = retentionLabel(date);
+    buckets.set(label, (buckets.get(label) || 0) + 1);
+  }
+  const order = ['até 3 meses', '3–6 meses', '6–12 meses', '12–18 meses', '+18 meses'];
+  return {
+    text: `${city}: ${keys.size} cliente(s) com histórico no G4.\n\n${order.filter((k) => buckets.get(k)).map((k) => `• ${k} sem atendimento: ${buckets.get(k)}`).join('\n')}\n\nQuer que eu sugira alguns para Follow-up?`,
+    actions: [{ label: 'Sugerir 3 clientes', choice: `__say|sugerir 3 clientes de ${city}` }, { label: 'Abrir mapa', view: 'retencao', mode: 'map' }],
+  };
+}
+
 export async function answerSmartArIA(message: string, user: AppUser): Promise<ArIAReply | null> {
+  const folded = fold(message);
+  if (/\b(quant[oa]s?|total|numero de)\b/.test(folded) && /\bclientes?\b/.test(folded)) {
+    const city = cityFromMessage(message);
+    if (city) return countClientsByCity(city);
+  }
   if (isCityProspectIntent(message)) return suggestRetentionClientsByCity(message, user);
   return null;
 }
