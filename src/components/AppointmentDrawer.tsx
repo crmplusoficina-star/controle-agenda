@@ -177,12 +177,13 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
   useEffect(() => {
     if (!draft) { setQuick(null); return; }
     let cancelled = false;
+    setQuick(null);
     setQuickBusy(true);
     const timer = window.setTimeout(async () => {
       try {
         const result = await estimateRoute({
           id: draft.id, technician_id: draft.technician_id, appointment_date: draft.appointment_date, branch: draft.branch,
-          service_city: draft.service_city || '', service_reason: draft.service_reason, description: draft.description, created_at: (draft as any).created_at,
+          service_city: draft.service_city || '', client_name: draft.client_name || '', service_reason: draft.service_reason, description: draft.description, created_at: (draft as any).created_at,
         });
         if (!cancelled) setQuick(result);
       } catch {
@@ -192,7 +193,7 @@ export function AppointmentDrawer({ draft, setDraft, technicians, suggestions, m
       }
     }, 500);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [draft?.id, draft?.technician_id, draft?.appointment_date, draft?.service_city, draft?.service_reason, draft?.branch]);
+  }, [draft?.id, draft?.technician_id, draft?.appointment_date, draft?.service_city, draft?.service_reason, draft?.branch, draft?.client_name]);
 
   const cloudReady = Boolean(draft && routePreview?.status === 'ready' && routePreview.distance_km != null
     && routePreview.appointment_date === draft.appointment_date && routePreview.technician_id === draft.technician_id
