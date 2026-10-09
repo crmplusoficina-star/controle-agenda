@@ -215,6 +215,10 @@ export function ArIAWidget() {
 
   async function runChoice(action: ArIAAction) {
     if (busy || !action.choice) return;
+    if (action.choice.startsWith('__say|')) {
+      await sendText(action.choice.slice(6));
+      return;
+    }
     setMessages((current) => [...current, { id: nextId.current++, role: 'user', text: action.label }]);
     setBusy(true);
     scrollBottom();
@@ -312,8 +316,11 @@ export function ArIAWidget() {
     event.preventDefault();
     const value = text.trim();
     if (!value || busy) return;
-
     setText('');
+    await sendText(value);
+  }
+
+  async function sendText(value: string) {
     setMessages((current) => [...current, { id: nextId.current++, role: 'user', text: value }]);
     setBusy(true);
     scrollBottom();
