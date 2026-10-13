@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 
 PROJECT = 'ydziukxbglyuknamcokd'
 STAGE = 'g4_ordens_servico_stage'
-BACKUP = 'g4_ordens_servico_bkp_20261008'
+BACKUP = 'g4_ordens_servico_bkp_' + __import__('datetime').date.today().strftime('%Y%m%d')
 
 COLUMNS = [
     ('codigo_os_sap', 'CÓDIGO OS SAP', 'int'),
