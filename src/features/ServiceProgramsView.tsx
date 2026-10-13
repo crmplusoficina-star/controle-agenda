@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Plus, Search, Trash2 } from 'lucide-react';
+import { Plus, Search, Trash2, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { ColumnFilterHeader, foldText } from '../components/ColumnFilterHeader';
 import { useSession } from '../session';
 import type { Branch } from '../types';
 import './service-programs.css';
@@ -53,6 +54,39 @@ export function effectiveCity(row: { branch: string; city: string | null; servic
 
 const fmt = (value?: string | null) => value ? new Intl.DateTimeFormat('pt-BR').format(new Date(`${value.slice(0, 10)}T12:00:00`)) : '—';
 
+type ProgramColumn = { key: string; label: string; text: (row: ProgramRow) => string; sort?: (row: ProgramRow) => string };
+
+const dash = (value?: string | null) => value || '—';
+const COMMON_COLUMNS: ProgramColumn[] = [
+  { key: 'programmed', label: 'Data programação', text: (r) => fmt(r.programmed_date), sort: (r) => r.programmed_date || '' },
+  { key: 'executed', label: 'Data execução', text: (r) => fmt(r.executed_date), sort: (r) => r.executed_date || '' },
+  { key: 'notes', label: 'Observação', text: (r) => dash(r.notes) },
+  { key: 'status', label: 'Status', text: (r) => programStatus(r) },
+];
+const COLUMNS: Record<ProgramKind, ProgramColumn[]> = {
+  '150h': [
+    { key: 'pin', label: 'PIN', text: (r) => dash(r.pin) },
+    { key: 'branch', label: 'Filial', text: (r) => dash(r.branch) },
+    { key: 'client', label: 'Cliente', text: (r) => dash(r.client_name) },
+    { key: 'brand', label: 'Marca', text: (r) => dash(r.brand) },
+    { key: 'delivery', label: 'Data ET', text: (r) => fmt(r.delivery_date), sort: (r) => r.delivery_date || '' },
+    { key: 'city', label: 'Cidade', text: (r) => dash(effectiveCity(r)) },
+    ...COMMON_COLUMNS,
+  ],
+  campanha: [
+    { key: 'campaign', label: 'Campanha', text: (r) => dash(r.campaign_code) },
+    { key: 'branch', label: 'Filial', text: (r) => dash(r.branch) },
+    { key: 'machine', label: 'Máquina', text: (r) => `${r.model || ''}-${r.serial_number || ''}` },
+    { key: 'client', label: 'Cliente', text: (r) => r.client_name || 'Pendente de validação' },
+    { key: 'type', label: 'Tipo / prazo', text: (r) => dash(r.recommendation), sort: (r) => `${r.recommendation || ''}${r.repair_deadline || ''}` },
+    { key: 'city', label: 'Cidade', text: (r) => dash(effectiveCity(r)) },
+    ...COMMON_COLUMNS,
+  ],
+};
+
+// A Visita 150h vale só para séries VC (VL e BC ficam de fora)
+const isVisita150hSerial = (pin?: string | null) => String(pin || '').trim().toUpperCase().startsWith('VC');
+
 export function ServiceProgramsView({ kind, branches, allBranches }: { kind: ProgramKind; branches: string[]; allBranches: Branch[] }) {
   const { user } = useSession();
   const [rows, setRows] = useState<ProgramRow[]>([]);
@@ -64,7 +98,11 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ campaign: '', description: '', branch: '', model: '', serial: '', pin: '' });
   const [formError, setFormError] = useState('');
+  const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+  const [textFilters, setTextFilters] = useState<Record<string, string>>({});
+  const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
   const isAdmin = user.role === 'admin';
+  const columns = COLUMNS[kind];
   const branchKey = branches.join('|');
 
   const load = useCallback(async () => {
@@ -73,17 +111,21 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     const query = kind === '150h'
       ? supabase.from('inspection_150h').select('pin,branch,client_name,city,service_city,brand,model,delivery_date,programmed_date,executed_date,notes').order('delivery_date')
       : supabase.from('campaign_machines').select('id,campaign_code,branch,model,serial_number,pin,recommendation,repair_deadline,last_visit,opportunity_lost,client_name,city,service_city,programmed_date,executed_date,notes').order('campaign_code').order('serial_number');
-    const { data, error: loadError } = await (branches.length ? query.in('branch', branches) : query);
+    const scoped = kind === '150h' ? query.ilike('pin', 'VC%') : query;
+    const { data, error: loadError } = await (branches.length ? scoped.in('branch', branches) : scoped);
     if (loadError) {
       setError('Não foi possível carregar a lista.');
       setLoading(false);
       return;
     }
-    setRows((data || []).map((row: any) => ({ ...row, id: kind === '150h' ? row.pin : row.id })));
+    setRows((data || [])
+      .filter((row: any) => kind !== '150h' || isVisita150hSerial(row.pin))
+      .map((row: any) => ({ ...row, id: kind === '150h' ? row.pin : row.id })));
     setLoading(false);
   }, [kind, branchKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setSort(null); setTextFilters({}); setSelectedFilters({}); }, [kind]);
 
   const counts = useMemo(() => {
     const result: Record<string, number> = { todos: rows.length };
@@ -92,15 +134,47 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
     return result;
   }, [rows]);
 
+  const optionsByColumn = useMemo(() => {
+    const result: Record<string, string[]> = {};
+    for (const column of columns) {
+      const values = new Set(rows.map((row) => column.text(row)));
+      result[column.key] = [...values].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+    }
+    return result;
+  }, [rows, columns]);
+
+  const hasColumnFilters = columns.some((c) => textFilters[c.key] || selectedFilters[c.key]?.length);
+
   const visible = useMemo(() => {
     const term = search.trim().toUpperCase();
-    return rows.filter((row) => {
+    const filtered = rows.filter((row) => {
       if (statusFilter !== 'todos' && programStatus(row) !== statusFilter) return false;
+      for (const column of columns) {
+        const needle = textFilters[column.key];
+        const picked = selectedFilters[column.key];
+        if (!needle && !picked?.length) continue;
+        const text = column.text(row);
+        if (needle && !foldText(text).includes(foldText(needle))) return false;
+        if (picked?.length && !picked.includes(text)) return false;
+      }
       if (!term) return true;
       return [row.pin, row.client_name || (kind === 'campanha' ? 'PENDENTE DE VALIDAÇÃO' : ''), effectiveCity(row), row.branch, row.campaign_code, row.model, row.serial_number]
         .some((value) => String(value || '').toUpperCase().includes(term));
     });
-  }, [rows, statusFilter, search]);
+    const sortColumn = sort && columns.find((c) => c.key === sort.key);
+    if (!sort || !sortColumn) return filtered;
+    const value = (row: ProgramRow) => (sortColumn.sort ? sortColumn.sort(row) : sortColumn.text(row));
+    const factor = sort.direction === 'asc' ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const av = value(a);
+      const bv = value(b);
+      if (!av && bv) return 1;
+      if (av && !bv) return -1;
+      return av.localeCompare(bv, 'pt-BR', { numeric: true }) * factor;
+    });
+  }, [rows, statusFilter, search, columns, textFilters, selectedFilters, sort, kind]);
+
+  function clearColumnFilters() { setTextFilters({}); setSelectedFilters({}); setSort(null); }
 
   async function saveRow(row: ProgramRow, patch: Partial<ProgramRow>) {
     const next = { ...row, ...patch };
@@ -181,6 +255,7 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
         </div>
         <div className="sp-actions">
           <label className="search-box"><Search size={15}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={kind === '150h' ? 'PIN, cliente ou cidade' : 'Campanha, série ou cliente'} /></label>
+          {(hasColumnFilters || sort) && <button type="button" className="subtle-button" onClick={clearColumnFilters} title="Limpar filtros e ordenação das colunas"><X size={14}/> Limpar filtros</button>}
           {kind === 'campanha' && isAdmin && <button type="button" className="primary-button" onClick={() => setShowForm((v) => !v)}><Plus size={16}/>Máquina na campanha</button>}
         </div>
       </div>
@@ -202,10 +277,19 @@ export function ServiceProgramsView({ kind, branches, allBranches }: { kind: Pro
 
       <div className="sp-table">
         <div className={`sp-head sp-grid-${kind}`}>
-          {kind === '150h'
-            ? <><span>PIN</span><span>Filial</span><span>Cliente</span><span>Marca</span><span>Data ET</span><span>Cidade</span></>
-            : <><span>Campanha</span><span>Filial</span><span>Máquina</span><span>Cliente</span><span>Tipo / prazo</span><span>Cidade</span></>}
-          <span>Data programação</span><span>Data execução</span><span>Observação</span><span>Status</span>
+          {columns.map((column) => (
+            <ColumnFilterHeader
+              key={column.key}
+              label={column.label}
+              sortDirection={sort?.key === column.key ? sort.direction : null}
+              onSort={(direction) => setSort({ key: column.key, direction })}
+              filter={textFilters[column.key] || ''}
+              setFilter={(value) => setTextFilters((current) => ({ ...current, [column.key]: value }))}
+              options={optionsByColumn[column.key] || []}
+              selected={selectedFilters[column.key] || []}
+              setSelected={(values) => setSelectedFilters((current) => ({ ...current, [column.key]: values }))}
+            />
+          ))}
         </div>
         {loading && <div className="sp-message">Carregando...</div>}
         {error && <div className="sp-message">{error}</div>}
