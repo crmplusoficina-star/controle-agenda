@@ -172,6 +172,31 @@ function hashText(value: string) {
   return Math.abs(hash);
 }
 
+const MAP_CACHE_KEY = 'retention-map-cache-v1';
+const MAP_FRESH_MS = 10 * 60 * 1000;
+const mapMemoryCache = new Map<string, { at: number; data: MapResponse }>();
+
+function readStoredMap(signature: string): { at: number; data: MapResponse } | null {
+  try {
+    const raw = window.localStorage.getItem(MAP_CACHE_KEY);
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as { signature: string; at: number; data: MapResponse };
+    return stored.signature === signature && Array.isArray(stored.data?.points) ? { at: stored.at, data: stored.data } : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeMap(signature: string, entry: { at: number; data: MapResponse }) {
+  mapMemoryCache.set(signature, entry);
+  if (mapMemoryCache.size > 6) mapMemoryCache.delete(mapMemoryCache.keys().next().value as string);
+  try {
+    window.localStorage.setItem(MAP_CACHE_KEY, JSON.stringify({ signature, ...entry }));
+  } catch {
+    // cache é só aceleração; segue sem ele se o navegador recusar
+  }
+}
+
 function technicianMarkerStyle(technicianId?: string | null, technicianName?: string | null) {
   const key = technicianId || technicianName || 'tecnico';
   return TECHNICIAN_MARKER_COLORS[hashText(key) % TECHNICIAN_MARKER_COLORS.length];
@@ -572,8 +597,9 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
     setSavingLocation(false);
   }, [clientByKey, pendingLocations]);
 
+  const mapRequestRef = useRef(0);
   const loadMap = useCallback(async () => {
-    setLoading(true);
+    const requestId = ++mapRequestRef.current;
     setError('');
     const payloadClients = clients.map((client) => ({ client_key: canonicalClientKey(client.client_key), client_name: client.client_name, branch: client.branch, city: client.city, last_service_at: client.last_service_at }));
     const visibleAppointments = technicianIds.length ? appointments.filter((item) => technicianIds.includes(item.technician_id)) : appointments;
@@ -583,9 +609,27 @@ export function RetentionMap({ clients, serialsByClient, appointments, technicia
       client_name: item.client_name, equipment_serial: item.equipment_serial, service_city: item.service_city,
       service_reason: item.service_reason, description: item.description,
     }));
-    const { data: response, error: invokeError } = await supabase.functions.invoke('retention-map-context', { body: { clients: payloadClients, appointments: payloadAppointments, technician_id: routeTechnicianId || null } });
-    if (invokeError) setError('Não consegui carregar os pontos do mapa agora.');
-    else setData((response || { points: [], route: null, unresolved: 0, geocoded_now: 0 }) as MapResponse);
+    const body = { clients: payloadClients, appointments: payloadAppointments, technician_id: routeTechnicianId || null };
+    const bodyText = JSON.stringify(body);
+    const signature = `${bodyText.length}:${hashText(bodyText)}`;
+    const cached = mapMemoryCache.get(signature) || readStoredMap(signature);
+    if (cached) {
+      setData(cached.data);
+      if (Date.now() - cached.at < MAP_FRESH_MS) {
+        setLoading(false);
+        return;
+      }
+    }
+    setLoading(!cached);
+    const { data: response, error: invokeError } = await supabase.functions.invoke('retention-map-context', { body });
+    if (requestId !== mapRequestRef.current) return;
+    if (invokeError) {
+      if (!cached) setError('Não consegui carregar os pontos do mapa agora.');
+    } else {
+      const fresh = (response || { points: [], route: null, unresolved: 0, geocoded_now: 0 }) as MapResponse;
+      setData(fresh);
+      if (Array.isArray(fresh.points) && fresh.points.length) storeMap(signature, { at: Date.now(), data: fresh });
+    }
     setLoading(false);
   }, [appointments, clients, routeTechnicianId, technicianIds, technicians]);
 

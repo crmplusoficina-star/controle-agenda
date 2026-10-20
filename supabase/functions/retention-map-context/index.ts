@@ -10,6 +10,8 @@ const corsHeaders = {
 const USER_AGENT = 'AgendaTecnicaRetencao/6.0';
 const PAGE_SIZE = 1000;
 const EXACT_GEOCODE_LIMIT = 8;
+const PAGE_WAVE = 4;
+const CITY_CONCURRENCY = 6;
 
 const stateNames: Record<string, string> = {
   AC:'Acre',AL:'Alagoas',AP:'Amapá',AM:'Amazonas',BA:'Bahia',CE:'Ceará',DF:'Distrito Federal',ES:'Espírito Santo',GO:'Goiás',MA:'Maranhão',MT:'Mato Grosso',MS:'Mato Grosso do Sul',MG:'Minas Gerais',PA:'Pará',PB:'Paraíba',PR:'Paraná',PE:'Pernambuco',PI:'Piauí',RJ:'Rio de Janeiro',RN:'Rio Grande do Norte',RS:'Rio Grande do Sul',RO:'Rondônia',RR:'Roraima',SC:'Santa Catarina',SP:'São Paulo',SE:'Sergipe',TO:'Tocantins'
@@ -56,7 +58,7 @@ Deno.serve(async(req:Request)=>{
 
     const branches=Array.from(new Set([...clients.map(c=>c.branch),...appointments.map(a=>a.branch)].filter(Boolean)));
     const locations:ClientLocation[]=[];
-    for(let from=0;;from+=PAGE_SIZE){let q=db.from('g4_client_location_summary').select('client_key,client_name,branch,address,neighborhood,city,state').range(from,from+PAGE_SIZE-1);if(branches.length)q=q.in('branch',branches);const {data,error}=await q;if(error)throw error;const page=(data||[]) as ClientLocation[];locations.push(...page);if(page.length<PAGE_SIZE)break;}
+    for(let from=0,done=false;!done;from+=PAGE_SIZE*PAGE_WAVE){const wave=await Promise.all(Array.from({length:PAGE_WAVE},async(_,i)=>{const start=from+i*PAGE_SIZE;let q=db.from('g4_client_location_summary').select('client_key,client_name,branch,address,neighborhood,city,state').order('client_key').range(start,start+PAGE_SIZE-1);if(branches.length)q=q.in('branch',branches);const {data,error}=await q;if(error)throw error;return (data||[]) as ClientLocation[]}));for(const page of wave){locations.push(...page);if(page.length<PAGE_SIZE)done=true;}}
     const byKey=new Map(locations.map(r=>[r.client_key,r]));
     const byClientBranch=new Map(locations.map(r=>[`${normalize(r.client_name)}|${normalize(r.branch)}`,r]));
 
@@ -98,16 +100,19 @@ Deno.serve(async(req:Request)=>{
     const keyPairs=await Promise.all(queries.map(async q=>[q,await sha256(q)] as const));
     const queryKey=new Map(keyPairs);const cache=new Map<string,CacheRow>();
     const keys=keyPairs.map(([,k])=>k);
-    for(let i=0;i<keys.length;i+=200){const {data,error}=await db.from('map_location_cache').select('cache_key,query,lat,lng,display_name,precision,source').in('cache_key',keys.slice(i,i+200));if(error)throw error;for(const row of data||[])cache.set(row.cache_key,row as CacheRow);}
+    const chunks:string[][]=[];for(let i=0;i<keys.length;i+=200)chunks.push(keys.slice(i,i+200));
+    const cacheRows=await Promise.all(chunks.map(async chunk=>{const {data,error}=await db.from('map_location_cache').select('cache_key,query,lat,lng,display_name,precision,source').in('cache_key',chunk);if(error)throw error;return (data||[]) as CacheRow[]}));
+    for(const rows of cacheRows)for(const row of rows)cache.set(row.cache_key,row);
     let geocodedNow=0;
     async function saveCache(query:string,lat:number,lng:number,display:string,precision:string,source:string){const key=queryKey.get(query)||await sha256(query);const row={cache_key:key,query,lat,lng,display_name:display,precision,source,updated_at:new Date().toISOString()};await db.from('map_location_cache').upsert(row);cache.set(key,row as CacheRow);geocodedNow++;return row as CacheRow;}
 
     const cityCandidates=new Map<string,Candidate>();
     for(const c of candidates)if(c.cityQuery&&c.cityName&&c.state&&!c.locationUncertain)cityCandidates.set(c.cityQuery,c);
-    for(const c of cityCandidates.values()){
-      const key=queryKey.get(c.cityQuery!)||await sha256(c.cityQuery!);if(cache.get(key)?.precision==='city')continue;
-      try{const u=new URL('https://geocoding-api.open-meteo.com/v1/search');u.searchParams.set('name',c.cityName!);u.searchParams.set('count','20');u.searchParams.set('language','pt');u.searchParams.set('format','json');u.searchParams.set('countryCode','BR');const r=await fetch(u,{headers:{'User-Agent':USER_AGENT}});if(!r.ok)continue;const j=await r.json();const desiredState=fold(stateNames[normalize(c.state!)]||c.state);const desiredCity=fold(c.cityName);const chosen=(Array.isArray(j?.results)?j.results:[]).find((x:any)=>fold(String(x.name||''))===desiredCity&&fold(String(x.admin1||''))===desiredState&&String(x.country_code||'').toUpperCase()==='BR');if(chosen)await saveCache(c.cityQuery!,Number(chosen.latitude),Number(chosen.longitude),`${chosen.name}, ${chosen.admin1}`,'city','open-meteo');}catch{}
+    const pendingCities=[...cityCandidates.values()].filter(c=>{const key=queryKey.get(c.cityQuery!);return !(key&&cache.get(key)?.precision==='city')});
+    async function geocodeCity(c:Candidate){
+      try{const u=new URL('https://geocoding-api.open-meteo.com/v1/search');u.searchParams.set('name',c.cityName!);u.searchParams.set('count','20');u.searchParams.set('language','pt');u.searchParams.set('format','json');u.searchParams.set('countryCode','BR');const r=await fetch(u,{headers:{'User-Agent':USER_AGENT}});if(!r.ok)return;const j=await r.json();const desiredState=fold(stateNames[normalize(c.state!)]||c.state);const desiredCity=fold(c.cityName);const chosen=(Array.isArray(j?.results)?j.results:[]).find((x:any)=>fold(String(x.name||''))===desiredCity&&fold(String(x.admin1||''))===desiredState&&String(x.country_code||'').toUpperCase()==='BR');if(chosen)await saveCache(c.cityQuery!,Number(chosen.latitude),Number(chosen.longitude),`${chosen.name}, ${chosen.admin1}`,'city','open-meteo');}catch{}
     }
+    for(let i=0;i<pendingCities.length;i+=CITY_CONCURRENCY)await Promise.all(pendingCities.slice(i,i+CITY_CONCURRENCY).map(geocodeCity));
 
     let exactCalls=0;
     async function resolve(c:Candidate):Promise<CacheRow|null>{
