@@ -154,7 +154,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
   const rows = useMemo<ShareRow[]>(() => {
     const techMap = new Map(technicians.map((item) => [item.id, item.name]));
     return appointments
-      .filter((item) => weekDates.has(item.appointment_date) && techMap.has(item.technician_id) && Boolean(item.client_name?.trim()))
+      .filter((item) => weekDates.has(item.appointment_date) && techMap.has(item.technician_id) && [item.client_name, item.equipment_serial, item.service_city, item.service_reason, item.description].some((value) => Boolean(value?.trim())))
       .map((item) => ({
         date: item.appointment_date,
         technician: techMap.get(item.technician_id) || '',
@@ -285,7 +285,7 @@ export function AgendaShareModal({ open, onClose, anchorDate, technicians, appoi
           <div className="agenda-share-section-title"><div><strong>Prévia da agenda</strong><span>Técnico, cliente, cidade, tipo e série do equipamento.</span></div></div>
           <div className="agenda-share-preview">
             <div className="agenda-share-preview-brand"><strong>Agenda da semana · {branchLabel}</strong><span>{shortDate.format(shareWeekStart)} — {shortDate.format(addDays(shareWeekStart, 5))}</span></div>
-            {rows.length === 0 ? <div className="agenda-share-empty agenda-share-empty-preview">Nenhum atendimento com cliente associado nesta semana.</div> : <div className="agenda-share-days-grid">
+            {rows.length === 0 ? <div className="agenda-share-empty agenda-share-empty-preview">Nenhum atendimento nesta semana.</div> : <div className="agenda-share-days-grid">
               {days.map((day) => {
                 const dayRows = rows.filter((row) => row.date === isoDate(day));
                 if (!dayRows.length) return null;
